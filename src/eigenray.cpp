@@ -12,6 +12,7 @@ constexpr Real kOne  = static_cast<Real>(1);
 // One probe: trace to the receiver range and report where the ray got to.
 struct Probe {
     bool valid = false;
+    Real snell_invariant = 0;
     Real depth_m = 0;
     Real angle_rad = 0;
     Real time_s = 0;
@@ -38,6 +39,7 @@ Probe probe_at(const ProfileView& svp, Real source_depth_m, Real angle_rad,
     p.speed_mps = end.speed_mps;
     p.surface_bounces = r.surface_bounces;
     p.bottom_bounces = r.bottom_bounces;
+    p.snell_invariant = r.snell_invariant;
     return p;
 }
 
@@ -86,6 +88,42 @@ Real transmission_loss_db(const Eigenray& ray, Real range_m,
     const Real absorption = thorp_absorption_db_per_km(frequency_hz)
                           * (ray.path_length_m / static_cast<Real>(1000));
     return spread + absorption;
+}
+
+Real boundary_loss_db(const Eigenray& ray,
+                      const BoundaryModel& model,
+                      Real surface_speed_mps,
+                      Real bottom_speed_mps,
+                      Real frequency_hz) noexcept {
+    if (!(ray.snell_invariant > kZero)) return kZero;
+
+    Real total = kZero;
+    if (ray.surface_bounces > 0 && surface_speed_mps > kZero) {
+        // cos(theta) = xi * c at the boundary; a ray that turns before reaching
+        // the surface never gets there, and clamping keeps acos in range for
+        // the rounding that puts xi*c a hair above one.
+        const Real cos_th = clamp(ray.snell_invariant * surface_speed_mps, kZero, kOne);
+        const Real th = std::acos(cos_th);
+        total += static_cast<Real>(ray.surface_bounces)
+               * surface_loss_db(model.surface, th, frequency_hz, surface_speed_mps);
+    }
+    if (ray.bottom_bounces > 0 && bottom_speed_mps > kZero) {
+        const Real cos_th = clamp(ray.snell_invariant * bottom_speed_mps, kZero, kOne);
+        const Real th = std::acos(cos_th);
+        total += static_cast<Real>(ray.bottom_bounces)
+               * bottom_loss_db(model.bottom, th, bottom_speed_mps);
+    }
+    return total;
+}
+
+Real total_transmission_loss_db(const Eigenray& ray, Real range_m,
+                                Real frequency_hz,
+                                Real source_speed_mps,
+                                const BoundaryModel& model,
+                                Real surface_speed_mps,
+                                Real bottom_speed_mps) noexcept {
+    return transmission_loss_db(ray, range_m, frequency_hz, source_speed_mps)
+         + boundary_loss_db(ray, model, surface_speed_mps, bottom_speed_mps, frequency_hz);
 }
 
 std::size_t find_eigenrays(const ProfileView& svp,
@@ -163,6 +201,7 @@ std::size_t find_eigenrays(const ProfileView& svp,
                     e.arrival_speed_mps = mid.speed_mps;
                     e.surface_bounces = mid.surface_bounces;
                     e.bottom_bounces = mid.bottom_bounces;
+                    e.snell_invariant = mid.snell_invariant;
 
                     if (a.valid && b.valid) {
                         e.jacobian_m_per_rad =

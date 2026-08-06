@@ -5,7 +5,7 @@ Zero dependencies, zero heap allocation, C++20.
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 ![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)
-![Status](https://img.shields.io/badge/status-v0.4%20ray--acoustics%20coupled-orange.svg)
+![Status](https://img.shields.io/badge/status-v0.5%20boundary%20losses-orange.svg)
 ![Validated](https://img.shields.io/badge/validated-vs%20Bellhop-brightgreen.svg)
 
 ![Munk deep sound channel propagation](data/munk_rays.png)
@@ -139,6 +139,44 @@ Verified on upsweeps, downsweeps and narrow sweeps — the narrowband formula is
 off by 13 samples on the 8-16 kHz case where the wideband form agrees within 3.
 Derivation in [`docs/math_spec.md §6.2`](docs/math_spec.md).
 
+**Boundaries cost what they cost.** Bottom reflection is the Rayleigh
+fluid-fluid coefficient, pinned by three independent closed-form limits — the
+critical angle from the speed ratio, the impedance ratio at normal incidence,
+and unity below critical for a lossless bottom. The critical angle,
+
+```
+θ_c = arccos(c_water / c_sediment)     — 24.62° for medium sand
+```
+
+is the number that decides which paths survive to long range in shallow water.
+Sediment attenuation enters as a complex speed, so `|R| < 1` at *every* angle:
+without it, sub-critical rays are trapped forever and shallow-water range is
+unbounded, which is not what the ocean does.
+
+The complex square root has two branches and only one is physical. Rather than
+reason about sign conventions, the implementation takes the branch that
+conserves energy — a 9100-combination sweep over speed, density, attenuation and
+angle gives `max |R| = 1.000000000000`.
+
+What that does to a 200 m duct at 3 km, 5 kHz, 8 m/s wind, sand bottom:
+
+| surface | bottom | grazing | TL before | TL now |
+|---|---|---|---|---|
+| 0 | 0 | — | 71.80 | **71.80** |
+| 1 | 1 | 6.83° | 70.67 | 82.85 |
+| 2 | 2 | 13.93° | 70.95 | 132.73 |
+| 4 | 3 | 24.69° | 71.62 | **199.51** |
+
+Paths that all sat within 1 dB of each other now span 128 dB. The direct path is
+unchanged, as it must be.
+
+**Surface loss is capped, and the cap is the honest part.** At 0.5 m seas,
+10 kHz and 20° grazing the coherent-scattering formula gives a **700 dB** loss.
+That is arithmetic, not physics: the scattered energy goes into a diffuse field
+a ray model does not carry, so the path is not 700 dB down — its *specular* part
+is. The library reports a capped 30 dB and says why, rather than deleting a path
+that is still in the water.
+
 **Eigenrays, and spreading loss that reduces exactly to the closed form.** An
 eigenray is a launch angle that reaches a given receiver. The search is exact
 rather than interpolated: the tracer already stops on a range budget to machine
@@ -256,12 +294,14 @@ tells you the code did not change. These tell you it is right:
 | Mackenzie vs Chen-Millero, common validity box | 0.53 m/s max disagreement |
 | Ray-tube spreading vs 20 log10(R), 9 geometries | 0.0000 dB |
 | Thorp absorption vs the published formula | within 10% (what the fit is worth) |
+| Rayleigh \|R\| ≤ 1 over 9100 sediment/angle combinations | max 1.000000000000 |
+| Critical angle, normal incidence, sub-critical unity | exact to 1e-10 |
 | FFT vs a direct O(N²) DFT sharing no code | 2.3e-16 relative |
 | FFT correlation vs direct O(N·L) correlation | 1.1e-15 relative |
 | Matched filter peak, width, coherent gain | `A·E/2`, `1/B`, `L/2` — all matched |
 | Waveform classification, 4 types at −4.4 dB SNR | 100/100 |
 
-6440 checks. Clean under GCC 15 and Clang 21 with `-Wconversion -Wsign-conversion
+15642 checks. Clean under GCC 15 and Clang 21 with `-Wconversion -Wsign-conversion
 -Wold-style-cast -Wdouble-promotion -Werror`, and under ASan + UBSan. Passes in
 both `double` and `float` builds. Zero allocation is proven by `nm` over the
 built archive, not asserted: the library references only libm and `memset`.
@@ -377,8 +417,11 @@ Stated plainly, because the gaps matter more than the features:
 - **No bearing.** Single channel; bearing needs an array.
 - **Ray theory, with its caustics.** Levels near a caustic are flagged rather
   than computed; a correct treatment needs a wave solution through them.
-- **No bottom loss model.** Reflection is specular and lossless, so a
-  bottom-bounced path is reported louder than it really is.
+- **No diffuse field.** Surface scattering removes the specular component and
+  the loss is capped to acknowledge the energy went somewhere, but where it went
+  is not modelled. Reverberation is v0.6.
+- **Plane-wave, flat-interface reflection.** No beam displacement near the
+  critical angle, no sediment layering, no shear in the bottom.
 - **Monostatic only.** Multipath echoes assume the return travels the way the
   ping came; a bistatic geometry needs two path sets.
 - **Target strength is still a dB figure**, not the output of a scattering

@@ -396,14 +396,86 @@ flags such paths and leaves the level at zero rather than reporting a number.
 Verified both directly (`spreading_loss_db` with a zero Jacobian returns 0) and
 through the search in the Munk channel.
 
-## 7. Build and runtime hygiene ✅
+## 7. Boundary reflection — verified ✅
+
+Three independent closed-form limits pin the Rayleigh coefficient. Any one could
+be reproduced by a wrong expression; all three together could not.
+
+| limit | check | result |
+|---|---|---|
+| Critical angle | `arccos(c1/c2)` for 1550 / 1650 / 1800 m/s sediment | 14.593° / 24.620° / 33.557°, exact |
+| Normal incidence | `(Z2−Z1)/(Z2+Z1)` over 9 speed × density combinations | exact to 1e-10 |
+| Below critical, lossless | `\|R\| = 1` at 5 fractions of the critical angle | exact to 1e-12 |
+
+### Energy conservation, and the branch choice it settles
+
+The complex square root has two branches and only one gives a wave that decays
+into the sediment. The implementation picks the one that conserves energy,
+because the other yields `|R| > 1`. Swept over 5 speeds × 4 densities ×
+5 attenuations × 91 angles = **9100 combinations**:
+
+```
+max |R| = 1.000000000000
+```
+
+### Attenuation leaks below critical
+
+With a lossless bottom, sub-critical rays are trapped forever and shallow-water
+range is unbounded. Measured at half the critical angle:
+
+| attenuation | \|R\| | loss/bounce |
+|---|---|---|
+| 0.0 dB/λ | 1.000000 | 0.000 dB |
+| 0.5 dB/λ | 0.943259 | 0.507 dB |
+| 2.0 dB/λ | 0.802190 | 1.915 dB |
+
+Monotone in attenuation. The default sand costs 0.81 dB per bounce there — 8 dB
+over ten bounces, which decides whether a path survives.
+
+Bottom loss also grows with grazing angle as it should: 0.19 dB at 2°, 2.04 dB
+at the 24.6° critical angle, 9.05 dB at normal incidence. Steep paths die;
+grazing paths carry shallow-water range.
+
+### Surface roughness
+
+`|R| = exp(-G²/2)` checked against the closed form across 3 frequencies × 3
+angles, agreeing to 1e-9. Flat sea returns exactly 1. Pierson-Moskowitz
+`H₁/₃ = 0.0246U²` reproduced; 10 m/s wind gives 0.615 m RMS.
+
+**The cap is deliberate and documented.** At 0.5 m seas, 10 kHz, 20° grazing the
+coherent formula gives a **700 dB** loss. That is arithmetic, not physics: the
+scattered energy goes into a diffuse field a ray model does not carry, so the
+path is not 700 dB down — its *specular* part is. The library reports the capped
+30 dB and says why.
+
+### Integration with the eigenray path
+
+Grazing angles at each bounce come from the Snell invariant
+(`cos θ = ξ·c` at the boundary), verified against a hand computation: 2 surface
++ 3 bottom bounces at 10° gives 6.7532 dB, matching the sum of the individual
+losses exactly.
+
+**The effect this release exists for.** A 200 m duct at 3 km, 5 kHz, 8 m/s wind,
+sand bottom:
+
+| surface | bottom | grazing | TL without boundaries | with |
+|---|---|---|---|---|
+| 0 | 0 | — | 71.80 | **71.80** |
+| 1 | 1 | 6.83° | 70.67 | 82.85 |
+| 2 | 2 | 13.93° | 70.95 | 132.73 |
+| 4 | 3 | 24.69° | 71.62 | **199.51** |
+
+Paths that all sat within 1 dB of each other now span 128 dB. The direct path is
+unchanged, as it must be.
+
+## 8. Build and runtime hygiene ✅
 
 | Configuration | Result |
 |---|---|
 | GCC 15.3, `-Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion -Wold-style-cast -Wcast-qual -Wdouble-promotion -Werror` | clean |
 | Clang 21.1, same set | clean |
-| AddressSanitizer + UndefinedBehaviorSanitizer | clean, 6440 checks |
-| `Real = float` (`-DPHANTOM_REAL_FLOAT=ON`) | 6440 checks pass |
+| AddressSanitizer + UndefinedBehaviorSanitizer | clean, 15642 checks |
+| `Real = float` (`-DPHANTOM_REAL_FLOAT=ON`) | 15642 checks pass |
 | Heap allocations during execution | **zero** — proven by `nm` over the built archive: the library references only libm and `memset` |
 
 ### float vs double
@@ -421,7 +493,7 @@ layers:
 acceptable if you are differencing travel times for ranging. Use `double` unless
 your FPU forces otherwise.
 
-## 8. Performance (measured, not claimed)
+## 9. Performance (measured, not claimed)
 
 13th Gen Intel Core i7-13620H, `-O3`, single thread:
 
@@ -461,7 +533,7 @@ actually constrains a control loop, and measures **52 ns**. Re-run
 guarantee; these numbers are not a substitute for WCET analysis on the target
 silicon.
 
-## 9. Self-consistent but NOT independently verified ⚠️
+## 10. Self-consistent but NOT independently verified ⚠️
 
 - **Chen-Millero against the published UNESCO check tables.** The
   implementation is cross-validated against two independent equations (§3),
@@ -475,7 +547,7 @@ silicon.
 - **Real measured T/S profiles.** Everything so far uses analytic profiles
   (Munk, linear, isovelocity). Feeding World Ocean Atlas / Argo data is v0.2.
 
-## 10. Known limitations — not bugs, scope ⚠️
+## 11. Known limitations — not bugs, scope ⚠️
 
 - **Shadow fraction depends on ray density.** Gaps between adjacent rays read as
   shadow. Measured convergence for the 100 km Munk case on a 500×250 grid:
@@ -505,35 +577,32 @@ silicon.
   frequency-dependent.
 - **2-D (range–depth) only.** No azimuthal coupling or out-of-plane refraction.
 
-## 11. Not implemented in v0.4
+## 12. Not implemented in v0.5
 
 `BioMimeticCommEngine` is not in this release. See `docs/roadmap.md`.
 
 Known gaps within what *is* shipped:
 
+- **No diffuse field.** Surface scattering removes the specular component and
+  the library caps the loss to acknowledge that the energy went somewhere, but
+  where it went is not modelled. A reverberation model would be needed.
 - **Ray theory, with its caustics.** Levels near a caustic are flagged, not
-  computed. A correct treatment needs a wave solution through the caustic.
-- **No bottom loss model.** Reflection is specular and lossless; real sediment
-  reflection is grazing-angle and frequency dependent, and a bottom-bounced path
-  is therefore reported louder than it would be.
-- **Monostatic only.** `echoes_from_eigenrays` assumes the echo returns along
-  the path the ping arrived on. A bistatic geometry needs two path sets.
-- **No surface scattering or bubble loss**, both of which matter in sea state.
-- **Range-independent ocean.** No bathymetry, fronts or eddies; the eigenray
-  search inherits that from the tracer.
+  computed.
+- **Plane-wave, flat-interface reflection.** No beam displacement near the
+  critical angle, no sediment layering, no shear in the bottom.
+- **Monostatic only** for multipath echoes.
+- **Range-independent ocean.** No bathymetry, fronts or eddies.
 - **Cross-template ghosts** in the analyser bank (§5), unchanged.
-- **A bank only resolves what it spans** — an echo stretched beyond the
-  templates is mis-reported in time and type.
+- **A bank only resolves what it spans.**
 - **No bearing.** Single channel.
-- **Memory.** A Doppler bank is `MaxTemplates * FftSize * sizeof(Complex)`,
-  8 MB at 64 templates; it must not go on the stack.
+- **Memory.** A Doppler bank is `MaxTemplates * FftSize * sizeof(Complex)`.
 
 ## Reproducing
 
 ```bash
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
-./build/phantom_tests          # 6440 checks
+./build/phantom_tests          # 15642 checks
 ./build/phantom_bench          # timing table above
 ./build/munk_simulation data   # CSV + console report
 ./build/ping_intercept data    # streaming ping detection demo

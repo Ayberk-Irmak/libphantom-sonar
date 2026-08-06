@@ -10,6 +10,7 @@
 //
 //   ./countermeasure_loop
 #include "phantom/echo_synth.hpp"
+#include "phantom/boundary.hpp"
 #include "phantom/eigenray.hpp"
 #include "phantom/ping_analyzer.hpp"
 #include "phantom/profile.hpp"
@@ -275,14 +276,40 @@ int main() {
                 static_cast<double>(vehicle_depth_m),
                 static_cast<double>(sonar_range_m) / 1000.0);
     std::printf("  %zu eigenrays found\n", np);
-    std::printf("  %10s %10s %8s %8s %10s\n", "launch", "t (ms)", "srf", "btm", "TL (dB)");
+    // Boundary losses. Before v0.5 every reflection was perfect, which made a
+    // four-bounce path look as loud as the direct one -- the largest remaining
+    // overstatement in the transmission loss.
+    BoundaryModel bounds;
+    bounds.surface.rms_wave_height_m = wind_to_rms_wave_height_m(8);   // 8 m/s wind
+    const Real c_surface = speed_at(g_profile.view(), 0);
+    const Real c_bottom = speed_at(g_profile.view(), 300);
+    const Real crit = bottom_critical_angle_rad(bounds.bottom, c_bottom);
+
+    std::printf("  sediment %.0f m/s, density x%.1f, %.1f dB/wavelength\n",
+                static_cast<double>(bounds.bottom.sound_speed_mps),
+                static_cast<double>(bounds.bottom.density_ratio),
+                static_cast<double>(bounds.bottom.attenuation_db_per_wavelength));
+    std::printf("  critical grazing angle %.2f deg -- below it the bottom traps,\n"
+                "  above it energy leaks into the sediment\n",
+                static_cast<double>(rad2deg(crit)));
+    std::printf("  sea state: 8 m/s wind, %.2f m RMS wave height\n",
+                static_cast<double>(bounds.surface.rms_wave_height_m));
+
+    std::printf("  %10s %10s %8s %8s %10s %12s %10s\n",
+                "launch", "t (ms)", "srf", "btm", "graze", "TL no bnd", "TL total");
     for (std::size_t i = 0; i < np; ++i) {
-        std::printf("  %9.3f%s %10.3f %8u %8u %10.2f%s\n",
+        const double plain = static_cast<double>(
+            transmission_loss_db(paths[i], sonar_range_m, ping.centre_freq_hz, c));
+        const double total = static_cast<double>(total_transmission_loss_db(
+            paths[i], sonar_range_m, ping.centre_freq_hz, c, bounds, c_surface, c_bottom));
+        const double graze = static_cast<double>(rad2deg(static_cast<Real>(std::acos(
+            std::min(1.0, static_cast<double>(paths[i].snell_invariant)
+                        * static_cast<double>(c_bottom))))));
+        std::printf("  %9.3f%s %10.3f %8u %8u %9.2f%s %12.2f %10.2f%s\n",
                     static_cast<double>(rad2deg(paths[i].launch_angle_rad)), "d",
                     static_cast<double>(paths[i].travel_time_s) * 1e3,
                     paths[i].surface_bounces, paths[i].bottom_bounces,
-                    static_cast<double>(transmission_loss_db(paths[i], sonar_range_m,
-                                                             ping.centre_freq_hz, c)),
+                    graze, "d", plain, total,
                     paths[i].near_caustic ? "  [caustic]" : "");
     }
 

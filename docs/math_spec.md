@@ -666,3 +666,107 @@ length: comparable and the paths smear one echo, much larger and they resolve as
 separate targets. A 300 m duct at 2.5 km with a ±10° fan spreads arrivals over
 70 ms, which a 20 ms pulse resolves; the same geometry with a ±25° fan spreads
 them over 400 ms.
+
+---
+
+## 11. Boundary reflection
+
+Until v0.5 every boundary reflected perfectly, which made bounced paths louder
+than they are. In shallow water most paths bounce, so this was the largest
+remaining overstatement in the transmission loss.
+
+### 11.1 Bottom — the Rayleigh coefficient
+
+A fluid-fluid interface, water (`rho1, c1`) over sediment (`rho2, c2`). With
+grazing angles measured from the interface and Snell's law
+`cos(th1)/c1 = cos(th2)/c2`:
+
+```
+nu = c2/c1,   m = rho2/rho1
+sin(th2) = sqrt(1 - nu^2 cos^2(th1))
+R = (m nu sin(th1) - sin(th2)) / (m nu sin(th1) + sin(th2))
+```
+
+**Three closed-form limits pin this expression.** Any one could be reproduced by
+a wrong formula; all three together could not.
+
+| limit | value | why |
+|---|---|---|
+| normal incidence `th1 = 90°` | `(Z2 - Z1)/(Z2 + Z1)`, `Z = rho c` | the textbook impedance ratio |
+| `nu cos(th1) = 1` | `sin(th2) = 0`, so `\|R\| = 1` | the critical angle |
+| below critical, lossless | `\|R\| = 1` exactly | total internal reflection |
+
+**The critical angle is the number that matters:**
+
+```
+th_c = arccos(c1 / c2)
+```
+
+24.62° for medium sand at 1650 m/s. Rays grazing shallower than this are
+trapped by the bottom; steeper ones leak into the sediment. It is what decides
+which paths survive to long range in shallow water, and it depends on the speed
+ratio alone — not on density.
+
+A bottom *slower* than the water has no critical angle at all and leaks at every
+angle, which is why mud is acoustically far worse than sand.
+
+### 11.2 Sediment attenuation
+
+Published as `alpha` dB per wavelength, which enters as a complex sediment
+speed. From `alpha_dB/lambda = 20 log10(e) * alpha_np * lambda`:
+
+```
+delta = alpha / (40 pi log10 e) = alpha / 54.575
+c2' = c2 / (1 - i delta)
+```
+
+`R` is then complex and `|R| < 1` at **every** angle, including below critical.
+That matters: with a lossless bottom, sub-critical rays are trapped forever and
+shallow-water range is unbounded, which is not what the ocean does. At half the
+critical angle a default sand bottom costs 0.81 dB per bounce — 8 dB over ten.
+
+**Branch choice.** The complex square root has two branches and only one gives a
+wave that decays into the sediment. Rather than reason about sign conventions,
+the implementation takes the branch that conserves energy: the other yields
+`|R| > 1`, which no passive interface can do. A 9100-combination sweep over
+speed, density, attenuation and angle confirms `max |R| = 1.000000000000`.
+
+### 11.3 Surface — coherent scattering loss
+
+A flat pressure-release surface reflects perfectly. A rough one scatters the
+coherent (specular) component away:
+
+```
+|R| = exp(-G^2 / 2),   G = 2 k sigma sin(theta),   k = 2 pi f / c
+```
+
+`G` is the Rayleigh roughness parameter and `sigma` the RMS wave height. From
+wind, via the Pierson-Moskowitz fully developed sea:
+
+```
+H_1/3 = 0.0246 U^2   [U in m/s]      sigma = H_1/3 / 4
+```
+
+so 10 m/s of wind gives 0.62 m RMS.
+
+**This is the specular component only.** The scattered energy is not destroyed;
+it goes into a diffuse field that a ray model does not represent. At 0.5 m seas,
+10 kHz and 20° grazing the formula gives a 700 dB loss, which is arithmetic
+rather than physics — the path is not 700 dB down, its *specular* part is. The
+library therefore caps the reported surface loss (30 dB by default) and says
+why, rather than returning a number that would delete a path that is still in
+the water.
+
+### 11.4 Applying it along a path
+
+The grazing angle at each bounce comes from the Snell invariant rather than from
+having tracked it, which is exact in a range-independent ocean:
+
+```
+cos(theta_boundary) = xi * c(z_boundary)
+```
+
+Total boundary loss is then `n_surface * L_s(theta_s) + n_bottom * L_b(theta_b)`.
+For a 200 m duct at 3 km, 5 kHz, 8 m/s wind and a sand bottom, this takes paths
+that all sat within 1 dB of each other and spreads them over 128 dB — the
+four-bounce path is no longer a peer of the direct one.

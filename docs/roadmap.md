@@ -48,7 +48,7 @@ incoming ping is the harder half, so it shipped first.
 - Cross-check between halves: a Doppler bin error of 4 m/s produces exactly the
   arrival-time bias the wideband coupling formula predicts
 
-## v0.4 — Ray-acoustics coupling ✅ *(current)*
+## v0.4 — Ray-acoustics coupling ✅
 
 The two halves now meet through the physics, not just the sound speed.
 
@@ -64,23 +64,35 @@ The two halves now meet through the physics, not just the sound speed.
   build silently loses 11 of 14 paths at the double-precision default. The
   default now follows the build.
 
-## v0.5 — Wave-acoustics and boundaries
+## v0.5 — Boundary losses ✅ *(current)*
 
-The gaps v0.4 documented rather than closed.
+The largest remaining overstatement in the transmission loss: every boundary
+used to reflect perfectly, and in shallow water most paths bounce.
 
-- [ ] Bottom loss: grazing-angle and frequency-dependent reflection, so a
-      bottom-bounced path is not reported louder than it is.
-- [ ] Surface scattering and bubble loss, both of which matter in sea state.
-- [ ] Beam displacement and a caustic treatment that returns a level instead of
-      a flag.
-- [ ] Bistatic geometries: `echoes_from_eigenrays` assumes the echo returns the
-      way the ping came.
+- Rayleigh bottom reflection, pinned by three closed-form limits: the critical
+  angle from the speed ratio, the impedance ratio at normal incidence, and
+  unity below critical for a lossless bottom
+- Sediment attenuation as a complex speed, so sub-critical rays leak; without
+  it shallow-water range is unbounded
+- Energy conservation over 9100 combinations settles the complex-sqrt branch
+- Rough-surface coherent loss, with the cap the diffuse field demands
+- Grazing angles at each bounce from the Snell invariant, exact
+- A 200 m duct at 3 km: paths that sat within 1 dB now span 128 dB
+
+## v0.6 — Reverberation and boundaries, part two
+
+- [ ] Diffuse scattering: where the surface-scattered energy actually goes.
+      The cap in v0.5 acknowledges the gap rather than filling it.
+- [ ] Bottom backscatter and volume reverberation, which set the noise floor a
+      real detector fights, not the white noise the analyser assumes.
+- [ ] Beam displacement near the critical angle; sediment layering.
+- [ ] A caustic treatment that returns a level instead of a flag.
+- [ ] Bistatic geometries.
 - [ ] Range-dependent bathymetry (piecewise-linear bottom).
-- [ ] Cross-template ghost suppression: association logic across detections.
-- [ ] Bearing estimation, which needs an array rather than the single channel
-      assumed so far.
+- [ ] Cross-template ghost suppression.
+- [ ] Bearing estimation, which needs an array.
 
-## v0.6 — Real data
+## v0.7 — Real data
 
 - [x] **Bellhop cross-validation.** Done in v0.1.1. Both codes read the same
       `.env`; Bellhop converges toward the analytic arc solution as its step
@@ -90,7 +102,7 @@ The gaps v0.4 documented rather than closed.
 - [ ] **Real T/S profiles.** World Ocean Atlas (WOA23) and Argo float ingest;
       ship two or three real regional profiles in `data/` with provenance.
 
-## v0.7 — Covert acoustic communication
+## v0.8 — Covert acoustic communication
 
 - [ ] DSSS modulator/demodulator with configurable chip rate and explicit
       processing gain `10·log10(N)`
@@ -103,14 +115,14 @@ The gaps v0.4 documented rather than closed.
 - [ ] Bio-mimetic waveform shaping (spectral masking against ambient noise and
       biological transients)
 
-## v0.8 — Bindings and portability
+## v0.9 — Bindings and portability
 
 - [ ] Stable C ABI (`phantom.h`, hand-written, no generator)
 - [ ] Rust `phantom-sonar-sys` + safe wrapper crate
 - [ ] Cortex-M7 / RISC-V cross-compilation in CI with size and WCET reporting
 - [ ] `-fno-exceptions -fno-rtti` build mode
 
-## v0.9 — Hardware in the loop
+## v0.10 — Hardware in the loop
 
 See `docs/hardware.md` for the bench design and the bill of materials. Bench and
 tank only — a real acoustic transmitter in open water is a regulatory and

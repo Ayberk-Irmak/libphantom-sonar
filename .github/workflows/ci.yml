@@ -205,6 +205,9 @@ jobs:
           # The ray tracer must still be supplying the multipath structure.
           grep -q "Multipath from the ray tracer" loop.txt
           grep -qE "-> [0-9]+ echoes spanning" loop.txt
+          # Boundary losses must be in the picture: a bounced path has to cost
+          # more than the direct one, or v0.5 has silently regressed.
+          grep -q "critical grazing angle" loop.txt
 
       - uses: actions/upload-artifact@v4
         with:

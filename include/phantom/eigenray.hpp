@@ -14,6 +14,7 @@
 #ifndef PHANTOM_EIGENRAY_HPP
 #define PHANTOM_EIGENRAY_HPP
 
+#include "phantom/boundary.hpp"
 #include "phantom/profile.hpp"
 #include "phantom/ray_tracer.hpp"
 #include "phantom/types.hpp"
@@ -39,6 +40,12 @@ struct Eigenray {
 
     std::uint32_t surface_bounces = 0;
     std::uint32_t bottom_bounces = 0;
+
+    // xi = cos(theta)/c, constant along the ray. In a range-independent ocean
+    // this recovers the grazing angle at ANY depth, so the angle at each
+    // boundary bounce is exact without having been tracked:
+    //     cos(theta_boundary) = xi * c(z_boundary)
+    Real snell_invariant = 0;
 
     // A caustic is where neighbouring rays cross and the tube collapses. Ray
     // theory predicts infinite intensity there, which is a known failure of the
@@ -78,9 +85,34 @@ struct Eigenray {
                                      Real arrival_speed_mps) noexcept;
 
 // Total one-way transmission loss for a path at a given frequency:
-// spreading plus Thorp absorption over the arc length.
+// spreading plus Thorp absorption over the arc length. Boundary losses are NOT
+// included -- see boundary_loss_db and total_transmission_loss_db.
 [[nodiscard]] Real transmission_loss_db(const Eigenray& ray, Real range_m,
                                         Real frequency_hz, Real source_speed_mps) noexcept;
+
+// Loss from every boundary interaction along the path, dB.
+//
+// The grazing angle at each bounce comes from the Snell invariant rather than
+// from having recorded it, which is exact in a range-independent ocean:
+// cos(theta) = xi * c at the boundary depth. Each surface bounce costs
+// surface_loss_db and each bottom bounce bottom_loss_db, at that angle.
+//
+// Sub-critical bottom bounces cost almost nothing and super-critical ones cost
+// several dB apiece, so a path with four bounces can be anywhere from
+// negligible to gone depending only on its launch angle.
+[[nodiscard]] Real boundary_loss_db(const Eigenray& ray,
+                                    const BoundaryModel& model,
+                                    Real surface_speed_mps,
+                                    Real bottom_speed_mps,
+                                    Real frequency_hz) noexcept;
+
+// Spreading + absorption + boundaries: what a path actually costs.
+[[nodiscard]] Real total_transmission_loss_db(const Eigenray& ray, Real range_m,
+                                              Real frequency_hz,
+                                              Real source_speed_mps,
+                                              const BoundaryModel& model,
+                                              Real surface_speed_mps,
+                                              Real bottom_speed_mps) noexcept;
 
 struct EigenraySearch {
     Real angle_min_rad = deg2rad(static_cast<Real>(-45));
