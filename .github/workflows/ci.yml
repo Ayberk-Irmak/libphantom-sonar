@@ -208,6 +208,9 @@ jobs:
           # Boundary losses must be in the picture: a bounced path has to cost
           # more than the direct one, or v0.5 has silently regressed.
           grep -q "critical grazing angle" loop.txt
+          # Reverberation must still show the SL/TL cancellation argument.
+          grep -q "echo-to-reverberation ratio" loop.txt
+          grep -q "a louder transmitter buys nothing" loop.txt
 
       - uses: actions/upload-artifact@v4
         with:

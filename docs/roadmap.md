@@ -64,7 +64,7 @@ The two halves now meet through the physics, not just the sound speed.
   build silently loses 11 of 14 paths at the double-precision default. The
   default now follows the build.
 
-## v0.5 — Boundary losses ✅ *(current)*
+## v0.5 — Boundary losses ✅
 
 The largest remaining overstatement in the transmission loss: every boundary
 used to reflect perfectly, and in shallow water most paths bounce.
@@ -79,20 +79,33 @@ used to reflect perfectly, and in shallow water most paths bounce.
 - Grazing angles at each bounce from the Snell invariant, exact
 - A 200 m duct at 3 km: paths that sat within 1 dB now span 128 dB
 
-## v0.6 — Reverberation and boundaries, part two
+## v0.6 — Reverberation ✅ *(current)*
 
-- [ ] Diffuse scattering: where the surface-scattered energy actually goes.
-      The cap in v0.5 acknowledges the gap rather than filling it.
-- [ ] Bottom backscatter and volume reverberation, which set the noise floor a
-      real detector fights, not the white noise the analyser assumes.
-- [ ] Beam displacement near the critical angle; sediment layering.
-- [ ] A caustic treatment that returns a level instead of a flag.
-- [ ] Bistatic geometries.
-- [ ] Range-dependent bathymetry (piecewise-linear bottom).
-- [ ] Cross-template ghost suppression.
-- [ ] Bearing estimation, which needs an array.
+Where the energy v0.5 capped away actually goes, and what an active sonar is
+really fighting at short range.
 
-## v0.7 — Real data
+- Lambert bottom backscatter and Chapman-Harris surface backscatter
+- Ensonified area and volume, and the two decay laws that identify the
+  mechanism: 30 log10(r) for boundary, 20 log10(r) for volume
+- The echo-to-reverberation ratio, in which source level and transmission loss
+  cancel exactly -- verified over nine SL/TL combinations
+- Reverberation-limited range: where a bigger transmitter starts helping again
+- A reverberation envelope generator, and a demonstration that CA-CFAR tracks a
+  21.6 dB decay across a block where no fixed threshold can
+
+## v0.7 — Arrays and bearing
+
+Everything so far is single-channel, which means no bearing and no spatial
+processing. That is the largest remaining structural gap.
+
+- [ ] Line array geometry, delay-and-sum beamforming, beam patterns.
+- [ ] Bearing estimation and its Cramer-Rao bound, the spatial twin of the
+      arrival-time bound already verified in v0.2.
+- [ ] Array gain against isotropic noise, and directional reverberation --
+      the narrower beam that v0.6 showed is worth 10 dB per factor of ten.
+- [ ] Split-beam or interferometric bearing for a compact array.
+
+## v0.8 — Real data
 
 - [x] **Bellhop cross-validation.** Done in v0.1.1. Both codes read the same
       `.env`; Bellhop converges toward the analytic arc solution as its step
@@ -102,7 +115,7 @@ used to reflect perfectly, and in shallow water most paths bounce.
 - [ ] **Real T/S profiles.** World Ocean Atlas (WOA23) and Argo float ingest;
       ship two or three real regional profiles in `data/` with provenance.
 
-## v0.8 — Covert acoustic communication
+## v0.9 — Covert acoustic communication
 
 - [ ] DSSS modulator/demodulator with configurable chip rate and explicit
       processing gain `10·log10(N)`
@@ -115,14 +128,14 @@ used to reflect perfectly, and in shallow water most paths bounce.
 - [ ] Bio-mimetic waveform shaping (spectral masking against ambient noise and
       biological transients)
 
-## v0.9 — Bindings and portability
+## v0.10 — Bindings and portability
 
 - [ ] Stable C ABI (`phantom.h`, hand-written, no generator)
 - [ ] Rust `phantom-sonar-sys` + safe wrapper crate
 - [ ] Cortex-M7 / RISC-V cross-compilation in CI with size and WCET reporting
 - [ ] `-fno-exceptions -fno-rtti` build mode
 
-## v0.10 — Hardware in the loop
+## v0.11 — Hardware in the loop
 
 See `docs/hardware.md` for the bench design and the bill of materials. Bench and
 tank only — a real acoustic transmitter in open water is a regulatory and

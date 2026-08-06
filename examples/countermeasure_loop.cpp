@@ -14,6 +14,7 @@
 #include "phantom/eigenray.hpp"
 #include "phantom/ping_analyzer.hpp"
 #include "phantom/profile.hpp"
+#include "phantom/reverberation.hpp"
 #include "phantom/sound_speed.hpp"
 
 #include <array>
@@ -337,7 +338,59 @@ int main() {
                                               - paths[0].path_length_m) / 1000.0);
     }
 
-    // ---- 7. The claim this library will not make ---------------------------
+    // ---- 7. What the sonar is actually fighting ----------------------------
+    // The analyser assumes white noise. A real active sonar at these ranges is
+    // reverberation-limited, and that changes which knobs help.
+    {
+        const Real beam = static_cast<Real>(0.15);          // ~8.6 degrees
+        const Real ts = 10;                                 // target strength
+        const Real graze = deg2rad(static_cast<Real>(12));
+        const Real ss_bottom = lambert_bottom_scattering_db(static_cast<Real>(-27), graze);
+        const Real ss_surface = chapman_harris_surface_scattering_db(
+            mps_to_knots(8), ping.centre_freq_hz, graze);
+
+        std::printf("\nReverberation\n");
+        std::printf("  bottom scattering (Lambert, 12 deg)  : %.1f dB\n",
+                    static_cast<double>(ss_bottom));
+        std::printf("  surface scattering (8 m/s, 12 deg)   : %.1f dB\n",
+                    static_cast<double>(ss_surface));
+
+        // The uncompressed pulse against its compressed equivalent. A chirp's
+        // range resolution is 1/B, not its length, so the ensonified area --
+        // and with it the reverberation -- shrinks by the time-bandwidth
+        // product.
+        const Real tau_raw = ping.duration_s;
+        const Real tau_eff = (ping.bandwidth_hz > 0)
+                           ? static_cast<Real>(1) / ping.bandwidth_hz : tau_raw;
+        const Real area_raw = ensonified_area_m2(sonar_range_m, beam, tau_raw, c);
+        const Real area_eff = ensonified_area_m2(sonar_range_m, beam, tau_eff, c);
+
+        const double er_raw = static_cast<double>(
+            echo_to_reverberation_ratio_db(ts, ss_bottom, area_raw));
+        const double er_eff = static_cast<double>(
+            echo_to_reverberation_ratio_db(ts, ss_bottom, area_eff));
+
+        std::printf("  ensonified area at %.1f km          : %.0f m^2 raw, %.0f m^2 compressed\n",
+                    static_cast<double>(sonar_range_m) / 1000.0,
+                    static_cast<double>(area_raw), static_cast<double>(area_eff));
+        std::printf("  echo-to-reverberation ratio          : %+.1f dB raw, %+.1f dB compressed\n",
+                    er_raw, er_eff);
+        std::printf("  pulse compression is worth            %+.1f dB here\n", er_eff - er_raw);
+
+        std::printf("\n  Note what does NOT appear in that ratio: source level and\n");
+        std::printf("  transmission loss. EL - RL = TS - S_s - 10log10(A), so they cancel.\n");
+        std::printf("  Against reverberation a louder transmitter buys nothing at all --\n");
+        std::printf("  only a shorter effective pulse or a narrower beam does. That is the\n");
+        std::printf("  design argument for the chirps this analyser is built around.\n");
+
+        const Real crossover = reverberation_limited_range_m(
+            200, ss_bottom, beam, tau_eff, c, 60);
+        std::printf("\n  Reverberation meets a 60 dB ambient at %.0f m: inside that the\n"
+                    "  geometry is reverberation-limited, outside it noise-limited.\n",
+                    static_cast<double>(crossover));
+    }
+
+    // ---- 8. The claim this library will not make ---------------------------
     const Real fc = ping.centre_freq_hz;
     const Real tau20 = max_timing_error_s(static_cast<Real>(-20), fc);
     const Real tau10 = max_timing_error_s(static_cast<Real>(-10), fc);

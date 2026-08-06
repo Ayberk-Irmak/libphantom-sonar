@@ -5,7 +5,7 @@ Zero dependencies, zero heap allocation, C++20.
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 ![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)
-![Status](https://img.shields.io/badge/status-v0.5%20boundary%20losses-orange.svg)
+![Status](https://img.shields.io/badge/status-v0.6%20reverberation-orange.svg)
 ![Validated](https://img.shields.io/badge/validated-vs%20Bellhop-brightgreen.svg)
 
 ![Munk deep sound channel propagation](data/munk_rays.png)
@@ -138,6 +138,42 @@ dt = -(v/c) · f_end / mu
 Verified on upsweeps, downsweeps and narrow sweeps — the narrowband formula is
 off by 13 samples on the 8-16 kHz case where the wideband form agrees within 3.
 Derivation in [`docs/math_spec.md §6.2`](docs/math_spec.md).
+
+**Against reverberation, a bigger transmitter buys nothing.** Write the echo and
+the reverberation with the same source level and the same two-way loss:
+
+```
+EL      = SL − 2·TL + TS
+RL      = SL − 2·TL + S_s + 10 log₁₀(A)
+EL − RL = TS − S_s − 10 log₁₀(A)
+```
+
+`SL` and `TL` **cancel exactly**. Verified over nine combinations of source
+level (160–240 dB) and transmission loss (40–90 dB): the ratio does not move by
+a thousandth of a dB. Doubling the transmit power raises the target and the
+background together.
+
+What *does* help is shrinking the ensonified area `A` — a tenth of the pulse
+length or a tenth of the beamwidth, each worth exactly +10 dB. And a chirp's
+effective pulse length is `1/B`, not its duration, so compressing a 20 ms pulse
+to its 83 µs resolution is worth **+23.8 dB**. That is the design argument for
+pulse compression, and it is why the analyser's waveforms are chirps rather than
+tones.
+
+**Two decay laws tell you which mechanism you are looking at.** Boundary
+reverberation falls as 30 log₁₀(r) — two-way spreading costs 40, the growing
+annulus gives back 10. Volume reverberation falls as 20, because the shell grows
+as r². Both reproduced exactly across three decades of range.
+
+**And it is why CFAR exists.** Reverberation decays tens of dB across a single
+processing block, so no fixed threshold is right anywhere:
+
+```
+background falls 21.6 dB across the block
+CA-CFAR: 20/20 detections, 3 false alarms in 20 empty blocks
+a single threshold at the block mean sits 9.5 dB below the near field
+  and 12.2 dB above the far field
+```
 
 **Boundaries cost what they cost.** Bottom reflection is the Rayleigh
 fluid-fluid coefficient, pinned by three independent closed-form limits — the
@@ -296,12 +332,14 @@ tells you the code did not change. These tell you it is right:
 | Thorp absorption vs the published formula | within 10% (what the fit is worth) |
 | Rayleigh \|R\| ≤ 1 over 9100 sediment/angle combinations | max 1.000000000000 |
 | Critical angle, normal incidence, sub-critical unity | exact to 1e-10 |
+| Reverberation decay: 30 log r boundary, 20 log r volume | exact |
+| Source level cancelling from E/R, 9 SL×TL combinations | identical to 1e-4 dB |
 | FFT vs a direct O(N²) DFT sharing no code | 2.3e-16 relative |
 | FFT correlation vs direct O(N·L) correlation | 1.1e-15 relative |
 | Matched filter peak, width, coherent gain | `A·E/2`, `1/B`, `L/2` — all matched |
 | Waveform classification, 4 types at −4.4 dB SNR | 100/100 |
 
-15642 checks. Clean under GCC 15 and Clang 21 with `-Wconversion -Wsign-conversion
+39926 checks. Clean under GCC 15 and Clang 21 with `-Wconversion -Wsign-conversion
 -Wold-style-cast -Wdouble-promotion -Werror`, and under ASan + UBSan. Passes in
 both `double` and `float` builds. Zero allocation is proven by `nm` over the
 built archive, not asserted: the library references only libm and `memset`.
@@ -417,9 +455,13 @@ Stated plainly, because the gaps matter more than the features:
 - **No bearing.** Single channel; bearing needs an array.
 - **Ray theory, with its caustics.** Levels near a caustic are flagged rather
   than computed; a correct treatment needs a wave solution through them.
-- **No diffuse field.** Surface scattering removes the specular component and
-  the loss is capped to acknowledge the energy went somewhere, but where it went
-  is not modelled. Reverberation is v0.6.
+- **Reverberation is a level, not a field.** The envelope has the right level
+  and the right post-correlation statistics, but a true series is the scatterer
+  field convolved with the pulse and so is correlated over the pulse length.
+- **Reverberation does not come from the traced paths** — it uses the sonar
+  equation with spherical spreading, not the eigenrays.
+- **Chapman-Harris coefficients are unverified** against the original paper;
+  its behaviour is checked, its constants are not.
 - **Plane-wave, flat-interface reflection.** No beam displacement near the
   critical angle, no sediment layering, no shear in the bottom.
 - **Monostatic only.** Multipath echoes assume the return travels the way the

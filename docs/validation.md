@@ -468,14 +468,74 @@ sand bottom:
 Paths that all sat within 1 dB of each other now span 128 dB. The direct path is
 unchanged, as it must be.
 
-## 8. Build and runtime hygiene ✅
+## 8. Reverberation — verified ✅
+
+### The range laws
+
+Exact, across three decades of range:
+
+| mechanism | measured decay | theory |
+|---|---|---|
+| boundary (area ∝ r) | 15.000 / 30.000 / 45.000 / 60.000 dB | 30 log₁₀(r) |
+| volume (volume ∝ r²) | 20.000 / 40.000 dB | 20 log₁₀(r) |
+
+### Source level cancels — the result this module exists for
+
+`EL − RL = TS − S_s − 10 log₁₀(A)`, swept over nine combinations of source level
+(160 / 200 / 240 dB) and transmission loss (40 / 66 / 90 dB):
+
+| SL | TL | EL | RL | EL−RL |
+|---|---|---|---|---|
+| 160 | 40 | 90.00 | 84.77 | **5.2288** |
+| 200 | 66 | 78.00 | 72.77 | **5.2288** |
+| 240 | 90 | 70.00 | 64.77 | **5.2288** |
+
+Identical to four decimals. **Against reverberation, transmit power buys
+nothing.** What does: a tenth of the pulse length or a tenth of the beamwidth,
+each worth exactly +10.00 dB. Compressing a 20 ms pulse to its 1/B = 83 µs
+resolution is worth **+23.8 dB**, which is the time-bandwidth product in dB.
+
+### Lambert and Chapman-Harris
+
+Lambert reproduces `mu + 20 log₁₀(sin θ)` exactly across 5°–90°, returns `mu` at
+normal incidence, is monotone over every degree from 2 to 90, and stays finite at
+zero grazing.
+
+Chapman-Harris behaves: monotone in wind over 3–40 knots, monotone in grazing
+angle over 2°–80°, and its value at exactly 30° matches the wind-and-frequency
+term alone — a structural check on the `log₁₀(θ/30)` form. Values fall in the
+−24 to −83 dB band.
+
+### Reverberation-limited range
+
+Crossover with ambient noise, verified to actually be a crossover (the two
+levels agree to 0.1 dB at the returned range):
+
+| ambient | crossover |
+|---|---|
+| 40 dB | 24.7 km |
+| 60 dB | 5.3 km |
+| 80 dB | 1.1 km |
+
+A quiet transmitter into a loud ocean is never reverberation-limited, and the
+function returns 0 rather than a number.
+
+### What it does to the detector
+
+A block whose background falls **21.6 dB** end to end. CA-CFAR with a training
+window short compared to the decay: **20/20 detections** of a target in the
+decayed region, 3 false alarms across 20 empty blocks. A single fixed threshold
+at the block mean sits 9.5 dB below the near field and 12.2 dB above the far
+field — wrong at both ends, which is precisely the gap CFAR closes.
+
+## 9. Build and runtime hygiene ✅
 
 | Configuration | Result |
 |---|---|
 | GCC 15.3, `-Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion -Wold-style-cast -Wcast-qual -Wdouble-promotion -Werror` | clean |
 | Clang 21.1, same set | clean |
-| AddressSanitizer + UndefinedBehaviorSanitizer | clean, 15642 checks |
-| `Real = float` (`-DPHANTOM_REAL_FLOAT=ON`) | 15642 checks pass |
+| AddressSanitizer + UndefinedBehaviorSanitizer | clean, 39926 checks |
+| `Real = float` (`-DPHANTOM_REAL_FLOAT=ON`) | 39926 checks pass |
 | Heap allocations during execution | **zero** — proven by `nm` over the built archive: the library references only libm and `memset` |
 
 ### float vs double
@@ -493,7 +553,7 @@ layers:
 acceptable if you are differencing travel times for ranging. Use `double` unless
 your FPU forces otherwise.
 
-## 9. Performance (measured, not claimed)
+## 10. Performance (measured, not claimed)
 
 13th Gen Intel Core i7-13620H, `-O3`, single thread:
 
@@ -533,8 +593,15 @@ actually constrains a control loop, and measures **52 ns**. Re-run
 guarantee; these numbers are not a substitute for WCET analysis on the target
 silicon.
 
-## 10. Self-consistent but NOT independently verified ⚠️
+## 11. Self-consistent but NOT independently verified ⚠️
 
+- **Chapman-Harris surface backscatter coefficients.** The formula is written
+  out in the header so a reader can check it, and its behaviour is verified
+  (monotone in wind and angle, right band, correct structure at 30°). The
+  coefficients themselves have NOT been checked against the 1962 paper. Two
+  reference values in this repository have already turned out to be misremembered
+  rather than wrong in the code — Thorp at 50 kHz and a critical angle — so this
+  one is flagged rather than assumed.
 - **Chen-Millero against the published UNESCO check tables.** The
   implementation is cross-validated against two independent equations (§3),
   which would catch any coefficient typo, but it has not been checked against
@@ -547,7 +614,7 @@ silicon.
 - **Real measured T/S profiles.** Everything so far uses analytic profiles
   (Munk, linear, isovelocity). Feeding World Ocean Atlas / Argo data is v0.2.
 
-## 11. Known limitations — not bugs, scope ⚠️
+## 12. Known limitations — not bugs, scope ⚠️
 
 - **Shadow fraction depends on ray density.** Gaps between adjacent rays read as
   shadow. Measured convergence for the 100 km Munk case on a 500×250 grid:
@@ -577,32 +644,34 @@ silicon.
   frequency-dependent.
 - **2-D (range–depth) only.** No azimuthal coupling or out-of-plane refraction.
 
-## 12. Not implemented in v0.5
+## 13. Not implemented in v0.6
 
 `BioMimeticCommEngine` is not in this release. See `docs/roadmap.md`.
 
 Known gaps within what *is* shipped:
 
-- **No diffuse field.** Surface scattering removes the specular component and
-  the library caps the loss to acknowledge that the energy went somewhere, but
-  where it went is not modelled. A reverberation model would be needed.
-- **Ray theory, with its caustics.** Levels near a caustic are flagged, not
-  computed.
-- **Plane-wave, flat-interface reflection.** No beam displacement near the
-  critical angle, no sediment layering, no shear in the bottom.
-- **Monostatic only** for multipath echoes.
-- **Range-independent ocean.** No bathymetry, fronts or eddies.
-- **Cross-template ghosts** in the analyser bank (§5), unchanged.
-- **A bank only resolves what it spans.**
+- **Reverberation is a level, not a field.** The envelope generator gives the
+  right level and the right post-correlation statistics, but a true series is
+  the scatterer field convolved with the transmitted pulse and is therefore
+  correlated over the pulse length. White noise scaled by the envelope is
+  correlated over one sample. Do not use it to study anything that depends on
+  the pre-correlation spectrum.
+- **No bistatic reverberation**, and no reverberation from the traced ray paths
+  — the level comes from the sonar equation with spherical spreading, not from
+  the eigenrays.
+- **Scattering strengths are empirical fits** with no frequency dependence for
+  Lambert and no verified coefficients for Chapman-Harris.
+- **Ray theory, with its caustics**; plane-wave flat-interface reflection.
+- **Monostatic multipath**, range-independent ocean.
+- **Cross-template ghosts** in the analyser bank.
 - **No bearing.** Single channel.
-- **Memory.** A Doppler bank is `MaxTemplates * FftSize * sizeof(Complex)`.
 
 ## Reproducing
 
 ```bash
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
-./build/phantom_tests          # 15642 checks
+./build/phantom_tests          # 39926 checks
 ./build/phantom_bench          # timing table above
 ./build/munk_simulation data   # CSV + console report
 ./build/ping_intercept data    # streaming ping detection demo

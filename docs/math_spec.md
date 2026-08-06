@@ -770,3 +770,112 @@ Total boundary loss is then `n_surface * L_s(theta_s) + n_bottom * L_b(theta_b)`
 For a 200 m duct at 3 km, 5 kHz, 8 m/s wind and a sand bottom, this takes paths
 that all sat within 1 dB of each other and spreads them over 128 dB — the
 four-bounce path is no longer a peer of the direct one.
+
+---
+
+## 12. Reverberation
+
+§11.3 capped the surface scattering loss and said the energy "goes into a
+diffuse field the ray model does not carry". This is that field coming back —
+and at short range it, not the ambient noise, is what an active sonar competes
+against.
+
+### 12.1 Scattering strengths
+
+**Lambert's law**, bottom backscatter:
+
+```
+S_s = mu + 10 log10(sin^2 theta) = mu + 20 log10(sin theta)
+```
+
+`mu` about −27 dB for many sediments. The `sin^2` is the projected area of a
+facet entering twice, once on transmit and once on receive. Angle-only: it
+carries no frequency dependence, and it fails near normal incidence where a
+smooth bottom gives a specular return far above Lambert.
+
+**Chapman-Harris (1962)**, wind-driven surface backscatter:
+
+```
+beta = 158 (v f^(1/3))^(-0.58)                     v in knots, f in Hz
+S_s  = 3.3 beta log10(theta/30) - 42.4 log10(beta) + 2.6      theta in degrees
+```
+
+The `log10(theta/30)` form means the angular term vanishes at 30°, so the value
+there depends only on wind and frequency — a structural property the test suite
+checks. **The coefficients have not been verified against the original paper**;
+see `docs/validation.md §10`.
+
+### 12.2 Ensonified extent
+
+```
+boundary:  A = r phi (c tau / 2)          annulus segment
+volume:    V = r^2 Omega (c tau / 2)      shell
+```
+
+The `c tau / 2` is the **range resolution**, and that is where pulse compression
+enters: a chirp's effective `tau` is `1/B`, not its length. A 20 ms pulse with
+12 kHz of bandwidth shrinks the ensonified area by its time-bandwidth product of
+240 — **24 dB straight off the reverberation**.
+
+### 12.3 The two range laws
+
+```
+RL = SL - 2 TL + S_s + 10 log10(extent)
+```
+
+With spherical spreading `TL = 20 log10(r)`:
+
+| mechanism | extent | decay |
+|---|---|---|
+| boundary | `A ∝ r` | `40 - 10 = ` **30 log10(r)** |
+| volume | `V ∝ r²` | `40 - 20 = ` **20 log10(r)** |
+
+Those two exponents are the signature of which mechanism dominates. A measured
+decay of 20 rather than 30 says the water column is scattering, not the
+boundary.
+
+### 12.4 The result that decides the design
+
+Write the echo and the reverberation with the same source level and the same
+two-way loss:
+
+```
+EL      = SL - 2 TL + TS
+RL      = SL - 2 TL + S_s + 10 log10(A)
+EL - RL = TS - S_s - 10 log10(A)
+```
+
+**`SL` and `TL` cancel exactly.** In a reverberation-limited geometry, doubling
+the transmit power raises the target and the background together and buys
+nothing. Verified over nine combinations of source level (160–240 dB) and
+transmission loss (40–90 dB): the ratio does not move by a thousandth of a dB.
+
+What *does* help is shrinking `A`: a tenth of the pulse length or a tenth of the
+beamwidth each buy exactly 10 dB. That is the whole design argument for pulse
+compression, and it is why the analyser's waveforms are chirps rather than
+tones.
+
+### 12.5 Where reverberation stops mattering
+
+Reverberation falls as 30 log10(r); ambient noise does not fall at all. Their
+crossover is the **reverberation-limited range** — inside it a bigger
+transmitter is wasted, outside it the geometry is noise-limited and power helps
+again. For a 200 dB source, −30 dB scattering, 0.2 rad beam and 10 ms pulse:
+
+| ambient | crossover |
+|---|---|
+| 40 dB | 24.7 km |
+| 60 dB | 5.3 km |
+| 80 dB | 1.1 km |
+
+### 12.6 What this does to CFAR
+
+Reverberation decays by tens of dB across a single processing block. A fixed
+threshold cannot be right anywhere: set for the near field it is deaf far out,
+set for the far field it is a wall of false alarms close in. Measured on a block
+whose background falls 21.6 dB, a single threshold at the block mean sits 9.5 dB
+below the near field and 12.2 dB above the far field.
+
+CA-CFAR estimates the background locally and tracks the decay, provided the
+training window is short compared to it — 20/20 detections of a target buried in
+the decayed region, with 3 false alarms across 20 empty blocks.

@@ -2,7 +2,7 @@
 cmake_minimum_required(VERSION 3.20)
 
 project(phantom-sonar
-        VERSION 0.5.0
+        VERSION 0.6.0
         DESCRIPTION "Real-time ocean acoustics, ray tracing and sonar pulse analysis"
         LANGUAGES CXX)
 
@@ -59,7 +59,8 @@ add_library(phantom_sonar
     src/ping_analyzer.cpp
     src/echo_synth.cpp
     src/eigenray.cpp
-    src/boundary.cpp)
+    src/boundary.cpp
+    src/reverberation.cpp)
 add_library(phantom::sonar ALIAS phantom_sonar)
 
 target_include_directories(phantom_sonar
@@ -100,7 +101,8 @@ if(PHANTOM_BUILD_TESTS)
         tests/test_ping_analyzer.cpp
         tests/test_echo_synth.cpp
         tests/test_eigenray.cpp
-        tests/test_boundary.cpp)
+        tests/test_boundary.cpp
+        tests/test_reverberation.cpp)
     target_link_libraries(phantom_tests PRIVATE phantom_sonar)
     target_include_directories(phantom_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
     target_compile_options(phantom_tests PRIVATE ${PHANTOM_WARNINGS})
