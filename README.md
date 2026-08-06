@@ -6,6 +6,7 @@ Zero dependencies, zero heap allocation, C++20.
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 ![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)
 ![Status](https://img.shields.io/badge/status-v0.1%20ray%20tracing-orange.svg)
+![Validated](https://img.shields.io/badge/validated-vs%20Bellhop-brightgreen.svg)
 
 ![Munk deep sound channel propagation](data/munk_rays.png)
 
@@ -22,8 +23,8 @@ A library for modelling how sound actually travels through the ocean, built to
 run in a real-time control loop on hardware that has no operating system and no
 allocator.
 
-**v0.1 ships the ocean model and the ray tracer.** Echo synthesis and covert
-communication are designed but not implemented — see [the roadmap](docs/roadmap.md).
+**v0.1 ships the ocean model and the ray tracer**, cross-validated against
+Bellhop. Echo synthesis and covert communication are designed but not implemented — see [the roadmap](docs/roadmap.md).
 The repository states what is verified, what is only self-consistent, and what
 is not verified at all, in [`docs/validation.md`](docs/validation.md).
 
@@ -57,6 +58,33 @@ reach for it to solve. This library implements Medwin, Mackenzie (the default,
 valid to 8000 m) and Chen & Millero (the real UNESCO algorithm, which takes
 pressure rather than depth), and cross-validates them against each other in the
 test suite.
+
+**Cross-validated against Bellhop.** The reference ray code of the Acoustics
+Toolbox, run on the same `.env` file — `phantom_trace` parses Bellhop's own input
+format, so a transcription bug cannot masquerade as agreement.
+
+![Bellhop cross-validation](data/bellhop_comparison.png)
+
+The clean measurement is the **turning depth**: one number per ray, needing no
+interpolation, solved for exactly here and approached by Bellhop as its
+integrator step shrinks.
+
+| Bellhop step | turning-depth error |
+|---|---|
+| 500 m | 0.084 m |
+| 100 m | 0.0024 m |
+| **10 m** | **0.00014 m** |
+
+**0.14 mm over a 101 km path.** The direction is the point: Bellhop converges
+*toward* this library's answer, which is what should happen if the analytic arc
+solution is the exact limit a stepping integrator approaches.
+
+Full-path RMS deviation is 0.27 m for trapped rays and 0.64 m with surface and
+bottom bounces, at Bellhop's default step — but those numbers are a **ceiling,
+not a measurement**, and [`docs/validation.md §2`](docs/validation.md) shows why:
+the residual halves every time this library's *output sampling* is doubled, so it
+is the comparison's chord-versus-arc error rather than a disagreement between the
+codes.
 
 **Verified against closed forms, not against baselines.** A recorded baseline
 tells you the code did not change. These tell you it is right:
@@ -103,6 +131,11 @@ cmake --build build
 ./build/phantom_bench          # the table above
 ./build/munk_simulation data   # CSV + channel analysis
 python3 tools/plot_rays.py data
+
+# cross-validate against Bellhop (downloads and builds the Acoustics Toolbox)
+./tools/bellhop_compare/setup_bellhop.sh
+python3 tools/bellhop_compare/compare.py \
+        --bellhop build/acoustics-toolbox/at/Bellhop/bellhop.exe --check
 ```
 
 ```cpp
@@ -138,6 +171,7 @@ const TraceResult r = trace_ray(svp.view(), ch.axis_depth_m, deg2rad(10), cfg, p
 | `PHANTOM_BUILD_TESTS` | ON | unit test binary |
 | `PHANTOM_BUILD_EXAMPLES` | ON | `munk_simulation` |
 | `PHANTOM_BUILD_BENCH` | ON | `phantom_bench` |
+| `PHANTOM_BUILD_TOOLS` | ON | `phantom_trace` for the Bellhop comparison |
 | `PHANTOM_REAL_FLOAT` | OFF | `Real = float` for single-precision FPUs |
 | `PHANTOM_WERROR` | OFF | warnings become errors |
 | `PHANTOM_SANITIZE` | OFF | ASan + UBSan on the test binary |
@@ -150,10 +184,6 @@ which is the opposite of what a deterministic library should do.
 
 Stated plainly, because the gaps matter more than the features:
 
-- **No comparison against an external reference code yet.** The arc solution is
-  exact and the invariants hold to machine precision, but Bellhop cross-validation
-  is v0.2 and is the single highest-value task in the project. Until it is done,
-  agreement with Bellhop is *expected*, not *demonstrated*.
 - **Geometric acoustics only** — ray paths, not ray intensities. No transmission
   loss, absorption, diffraction or caustic amplitude.
 - **Range-independent ocean.** `c` is a function of depth alone; no bathymetry,
@@ -163,6 +193,9 @@ Stated plainly, because the gaps matter more than the features:
   upper bound and always publish the ray count with it. The convergence table is
   in [`docs/validation.md §6`](docs/validation.md).
 - **2-D range–depth only.** No out-of-plane refraction.
+- **The Bellhop comparison covers geometry, not amplitude**, and only
+  range-independent profiles — because that is all the library models. It is not
+  evidence about transmission loss or range-dependent propagation.
 - No echo synthesis, no ping analysis, no communication engine — see the
   [roadmap](docs/roadmap.md).
 
@@ -180,6 +213,7 @@ documented with its limits.
 | [`docs/validation.md`](docs/validation.md) | what is verified, what is not, measured numbers |
 | [`docs/roadmap.md`](docs/roadmap.md) | v0.2 → v0.6, and what is explicitly out of scope |
 | [`docs/hardware.md`](docs/hardware.md) | the hardware-in-the-loop bench: parts, frequencies, latency budget |
+| [`tools/bellhop_compare/`](tools/bellhop_compare/README.md) | how the Bellhop cross-validation is set up and what it does not cover |
 | [`EXPORT_NOTICE.md`](EXPORT_NOTICE.md) | publication and export-control position |
 
 ## References

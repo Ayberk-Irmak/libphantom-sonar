@@ -123,6 +123,52 @@ jobs:
           --suppress=missingIncludeSystem
           -I include/ src/
 
+  bellhop-cross-validation:
+    name: Cross-validation vs Bellhop
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install gfortran
+        run: sudo apt-get update && sudo apt-get install -y gfortran
+
+      # The toolbox build is serial by necessity (undeclared Fortran .mod
+      # dependencies) and takes several minutes, so it is cached on the
+      # setup script's hash -- the pinned AT version lives in there.
+      - name: Cache Acoustics Toolbox
+        id: cache-at
+        uses: actions/cache@v4
+        with:
+          path: build/acoustics-toolbox
+          key: at-${{ runner.os }}-${{ hashFiles('tools/bellhop_compare/setup_bellhop.sh') }}
+
+      - name: Build Bellhop
+        if: steps.cache-at.outputs.cache-hit != 'true'
+        run: ./tools/bellhop_compare/setup_bellhop.sh
+
+      - name: Build libphantom-sonar
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DPHANTOM_WERROR=ON
+          cmake --build build --parallel
+
+      - name: Install Python dependencies
+        run: python3 -m pip install --quiet numpy matplotlib
+
+      # --check asserts the turning-depth agreement, which is the metric that
+      # needs no interpolation and so actually compares the two tracers.
+      - name: Compare
+        run: |
+          python3 tools/bellhop_compare/compare.py \
+                  --bellhop build/acoustics-toolbox/at/Bellhop/bellhop.exe \
+                  --check --json build/bellhop_summary.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bellhop-comparison
+          path: |
+            data/bellhop_comparison.png
+            build/bellhop_summary.json
+
   example-runs:
     name: Example produces the expected channel analysis
     runs-on: ubuntu-latest

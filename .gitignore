@@ -12,9 +12,18 @@ compile_commands.json
 .vscode/
 .idea/
 
-# Simulation output. The README figure is committed on purpose; the multi-MB
-# CSV it is generated from is not.
+# Simulation output. The README figures are committed on purpose; the multi-MB
+# CSV they are generated from is not.
 data/*.csv
 !data/README.md
 __pycache__/
 *.pyc
+
+# The Acoustics Toolbox is GPL-3 and is fetched by setup_bellhop.sh, never
+# vendored here. build/ already covers the default install location; this
+# guards against someone pointing it elsewhere in the tree.
+acoustics-toolbox/
+at_*.zip
+*.ray
+*.prt
+*.shd

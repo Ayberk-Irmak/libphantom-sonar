@@ -12,6 +12,7 @@ project(phantom-sonar
 option(PHANTOM_BUILD_TESTS    "Build the unit test binary"                ON)
 option(PHANTOM_BUILD_EXAMPLES "Build the example programs"                ON)
 option(PHANTOM_BUILD_BENCH    "Build the hot-path benchmark"              ON)
+option(PHANTOM_BUILD_TOOLS    "Build the Bellhop comparison tool"         ON)
 option(PHANTOM_REAL_FLOAT     "Use float instead of double for Real"      OFF)
 option(PHANTOM_WERROR         "Treat warnings as errors"                  OFF)
 option(PHANTOM_SANITIZE       "Build with ASan + UBSan (tests only)"      OFF)
@@ -111,6 +112,14 @@ if(PHANTOM_BUILD_BENCH)
     add_executable(phantom_bench bench/bench_hotpath.cpp)
     target_link_libraries(phantom_bench PRIVATE phantom_sonar)
     target_compile_options(phantom_bench PRIVATE ${PHANTOM_WARNINGS})
+endif()
+
+if(PHANTOM_BUILD_TOOLS)
+    # Reads a Bellhop .env file and traces it with this library, so both codes
+    # consume the same input. See tools/bellhop_compare/README.md.
+    add_executable(phantom_trace tools/bellhop_compare/phantom_trace.cpp)
+    target_link_libraries(phantom_trace PRIVATE phantom_sonar)
+    target_compile_options(phantom_trace PRIVATE ${PHANTOM_WARNINGS})
 endif()
 
 # ---------------------------------------------------------------------------

@@ -17,15 +17,15 @@ first.
 - SOFAR / duct analysis: axis, trapping cone, conjugate depths, surface duct
 - Ensonification grid and shadow zone extraction
 - 791 closed-form checks, ASan/UBSan clean, float and double builds
+- **Bellhop cross-validation** (`tools/bellhop_compare/`): turning depths agree
+  to 0.14 mm over 101 km at Bellhop's finest step, with the residual shown to be
+  the comparison's own sampling error rather than a difference between the codes
 
-## v0.2 — External validation and real data
+## v0.2 — Real data and eigenrays
 
-The credibility release. Nothing new gets built until the existing code is
-checked against something that was not written here.
-
-- [ ] **Bellhop cross-validation.** Run the Munk `MunkB_ray` case through the
-      Acoustics Toolbox, overlay ray paths, publish RMS path deviation and the
-      comparison figure. This is the highest-value single task in the project.
+- [x] **Bellhop cross-validation.** Done in v0.1.1. Both codes read the same
+      `.env`; Bellhop converges toward the analytic arc solution as its step
+      shrinks. See `docs/validation.md §2`.
 - [ ] **Chen-Millero against the published UNESCO check table**, as a unit test
       with the official values rather than mutual agreement between equations.
 - [ ] **Real T/S profiles.** World Ocean Atlas (WOA23) and Argo float ingest;
