@@ -2,8 +2,8 @@
 cmake_minimum_required(VERSION 3.20)
 
 project(phantom-sonar
-        VERSION 0.1.0
-        DESCRIPTION "Real-time ocean acoustics and sonar countermeasure simulation library"
+        VERSION 0.2.0
+        DESCRIPTION "Real-time ocean acoustics, ray tracing and sonar pulse analysis"
         LANGUAGES CXX)
 
 # ---------------------------------------------------------------------------
@@ -52,7 +52,11 @@ endif()
 add_library(phantom_sonar
     src/ray_tracer.cpp
     src/channel.cpp
-    src/coverage.cpp)
+    src/coverage.cpp
+    src/fft.cpp
+    src/waveform.cpp
+    src/matched_filter.cpp
+    src/ping_analyzer.cpp)
 add_library(phantom::sonar ALIAS phantom_sonar)
 
 target_include_directories(phantom_sonar
@@ -86,7 +90,11 @@ if(PHANTOM_BUILD_TESTS)
         tests/test_sound_speed.cpp
         tests/test_profile.cpp
         tests/test_ray_tracer.cpp
-        tests/test_channel.cpp)
+        tests/test_channel.cpp
+        tests/test_fft.cpp
+        tests/test_waveform.cpp
+        tests/test_matched_filter.cpp
+        tests/test_ping_analyzer.cpp)
     target_link_libraries(phantom_tests PRIVATE phantom_sonar)
     target_include_directories(phantom_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
     target_compile_options(phantom_tests PRIVATE ${PHANTOM_WARNINGS})
@@ -106,6 +114,10 @@ if(PHANTOM_BUILD_EXAMPLES)
     add_executable(munk_simulation examples/munk_simulation.cpp)
     target_link_libraries(munk_simulation PRIVATE phantom_sonar)
     target_compile_options(munk_simulation PRIVATE ${PHANTOM_WARNINGS})
+
+    add_executable(ping_intercept examples/ping_intercept.cpp)
+    target_link_libraries(ping_intercept PRIVATE phantom_sonar)
+    target_compile_options(ping_intercept PRIVATE ${PHANTOM_WARNINGS})
 endif()
 
 if(PHANTOM_BUILD_BENCH)

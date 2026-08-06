@@ -7,7 +7,7 @@ first.
 
 ---
 
-## v0.1 — Ocean model and ray tracing ✅ *(current)*
+## v0.1 — Ocean model and ray tracing ✅
 
 - Three sound speed equations (Medwin / Mackenzie / Chen-Millero-UNESCO) plus
   Leroy-Parthiot depth→pressure and the Munk canonical profile
@@ -21,7 +21,21 @@ first.
   to 0.14 mm over 101 km at Bellhop's finest step, with the residual shown to be
   the comparison's own sampling error rather than a difference between the codes
 
-## v0.2 — Real data and eigenrays
+## v0.2 — Ping analysis ✅ *(current)*
+
+The original specification jumped straight to echo synthesis, but **an echo
+synthesiser with no input is not a module.** Detecting and characterising the
+incoming ping is the harder half, so it shipped first.
+
+- Radix-2 FFT, zero allocation, verified against a direct DFT to 2.3e-16
+- CW / LFM / HFM synthesis with closed-form phase, and true time-scaling Doppler
+- FFT overlap-save matched filtering, verified against direct correlation
+- `PingAnalyzer`: matched filter bank + CA-CFAR + Pulse Descriptor Words
+- ToA estimation at **0.93-1.02x the envelope Cramer-Rao bound** across 20 dB
+- 100/100 waveform classification at -4.4 dB input SNR
+- 29x real time on one core; 65 ms detection latency, set by the block length
+
+## v0.3 — Real data and eigenrays
 
 - [x] **Bellhop cross-validation.** Done in v0.1.1. Both codes read the same
       `.env`; Bellhop converges toward the analytic arc solution as its step
@@ -31,25 +45,23 @@ first.
 - [ ] **Real T/S profiles.** World Ocean Atlas (WOA23) and Argo float ingest;
       ship two or three real regional profiles in `data/` with provenance.
 - [ ] Eigenray search — launch angles that connect a source to a given receiver.
-      Needed by everything in v0.3.
+      Needed by echo synthesis.
 - [ ] Range-dependent bathymetry (piecewise-linear bottom).
 
-## v0.3 — Ping analysis and echo synthesis
+## v0.4 — Echo synthesis
 
-Note the ordering. The original specification jumped straight to echo synthesis,
-but **an echo synthesiser with no input is not a module.** Detecting and
-characterising the incoming ping is the hard part and it comes first.
-
-- [ ] `PingAnalyzer` — replica-correlator / matched-filter bank producing a
-      Pulse Descriptor Word: type (CW / LFM / HFM), centre frequency, bandwidth,
-      pulse width, chirp rate, time of arrival, estimated bearing. Detection
-      latency is the binding constraint, target < 1 ms.
+- [ ] Doppler bank — replicate templates across Doppler bins so a fast target is
+      matched rather than merely detected, and the range-Doppler bias (measured
+      in v0.2, `docs/math_spec.md §6.2`) can actually be corrected.
+- [ ] Cross-template ghost suppression: association logic across detections.
 - [ ] Transmission loss along traced paths: spherical/cylindrical spreading plus
       Thorp absorption, so target strength numbers mean something.
 - [ ] `EchoSynthesizer` — delay/Doppler/target-strength shaped echo generation,
       `Δt = 2Δd/c`; multi-target pulse trains.
 - [ ] Ray-tube area and caustic handling, which is what a physically defensible
       shadow zone actually requires.
+- [ ] Bearing estimation, which needs an array rather than the single channel
+      v0.2 assumes.
 
 **Honest scope note.** Anti-phase cancellation of a vehicle's acoustic cross
 section is *not* achievable in practice with a point transducer against a
@@ -58,7 +70,7 @@ broadband. What can be simulated is narrowband, single-bearing nulling, and that
 is what will be implemented, documented with its limits. Overclaiming here is
 how a project loses the audience it is trying to reach.
 
-## v0.4 — Covert acoustic communication
+## v0.5 — Covert acoustic communication
 
 - [ ] DSSS modulator/demodulator with configurable chip rate and explicit
       processing gain `10·log10(N)`
@@ -71,14 +83,14 @@ how a project loses the audience it is trying to reach.
 - [ ] Bio-mimetic waveform shaping (spectral masking against ambient noise and
       biological transients)
 
-## v0.5 — Bindings and portability
+## v0.6 — Bindings and portability
 
 - [ ] Stable C ABI (`phantom.h`, hand-written, no generator)
 - [ ] Rust `phantom-sonar-sys` + safe wrapper crate
 - [ ] Cortex-M7 / RISC-V cross-compilation in CI with size and WCET reporting
 - [ ] `-fno-exceptions -fno-rtti` build mode
 
-## v0.6 — Hardware in the loop
+## v0.7 — Hardware in the loop
 
 See `docs/hardware.md` for the bench design and the bill of materials. Bench and
 tank only — a real acoustic transmitter in open water is a regulatory and

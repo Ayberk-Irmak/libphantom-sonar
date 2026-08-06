@@ -122,15 +122,132 @@ checks: monotonicity in `T`, `S` and `z` across the full validity range; the
 textbook reference point `c(15 °C, 35 PSU, 0 m) ≈ 1507 m/s` reproduced by all
 three; depth→pressure ≈ 101 bar at 1000 m.
 
-## 4. Build and runtime hygiene ✅
+## 4. Pulse analysis chain — verified against closed forms ✅
+
+Same standard as the ray tracer: every check is against a closed form, an
+invariant, or a theoretical bound, never against a recorded output.
+
+### FFT
+
+Hand-written, because "zero dependencies" would otherwise be a half-truth. It is
+also exactly the kind of code that looks right while being wrong, so:
+
+| Check | Result |
+|---|---|
+| vs a direct O(N²) DFT sharing no code, N = 256 | **2.3e-16** max relative error |
+| round trip `ifft(fft(x))`, N = 1024 | **4.4e-16** max absolute error |
+| Parseval, N = 512 | exact to **1e-15** |
+| known transforms (impulse, constant, single bin) | exact |
+| linearity, and every size from 2 to 4096 | exact |
+
+### Waveforms
+
+| Check | Result |
+|---|---|
+| `d(phase)/dt` vs the specified `f(t)`, LFM and HFM | **1.9e-11** relative |
+| HFM period linear in time (its defining property) | **1e-9** relative |
+| HFM → CW as the sweep vanishes | finite, matches the linear form |
+| Doppler is a time *scaling*: 10 m/s shortens a 20 ms pulse | 1920 → 1907 samples, matches `T/(1+v/c)` |
+
+### Matched filter
+
+| Property | Theory | Measured |
+|---|---|---|
+| FFT correlation vs direct O(N·L) correlation | identical | **1.1e-15** relative |
+| Peak lag | the true delay | exact, every delay tested |
+| Peak magnitude | `A·E/2` | 480.00 for `E` = 960 |
+| Compressed width | `1/B` = 83 µs | 83.3 µs (`B` = 12 kHz, from a 10 ms pulse) |
+| Coherent gain | `L/2` = 480 | 480 ± 5% |
+| Detection at −13.5 dB input SNR | — | 96/100 within one sample |
+
+### Doppler behaviour of the three waveform families
+
+Measured over a 60 ms 8-20 kHz sweep, peak loss versus closing speed:
+
+| closing speed | CW | LFM | HFM |
+|---|---|---|---|
+| 2.5 m/s | −9.9 dB | −0.45 dB | — |
+| 5 m/s | — | −5.7 dB | **−0.05 dB** |
+| 15 m/s | — | −9.9 dB | **−0.14 dB** |
+| 30 m/s | — | −13.1 dB | **−0.30 dB** |
+
+The CW figure is at its predicted first null, `v = c/(f0·T)`.
+
+**A correction to the textbook LFM range-Doppler formula.** The narrowband
+result `dt = -f_doppler/mu` with the shift taken at the *centre* frequency does
+not hold underwater, where Doppler is a time scaling rather than a frequency
+shift. The wideband form uses the sweep **end** frequency:
+
+```
+dt = -(v/c) · f_end / mu
+```
+
+Verified on upsweeps, downsweeps and narrow sweeps, agreeing within 3 samples
+while the narrowband formula is off by 13 samples on the 8-16 kHz case
+(derivation in `docs/math_spec.md §6.2`).
+
+### Arrival-time estimation vs the Cramér-Rao bound
+
+The strongest check in the library: not against another implementation, but
+against the best variance *any* unbiased estimator could achieve.
+
+**Which bound applies matters.** A magnitude (envelope) detector is bounded by
+the RMS bandwidth about the centre frequency; only a carrier-phase-coherent
+receiver is bounded by `f_rms` about zero. For an 8-20 kHz sweep the two differ
+by a factor of 4.16, so comparing an envelope detector against the coherent
+bound makes an efficient estimator look four times worse than it is.
+
+| noise σ | measured σ_ToA | envelope CRLB | ratio |
+|---|---|---|---|
+| 3.0 | 4.30 µs | 4.45 µs | **0.97** |
+| 1.0 | 1.48 µs | 1.48 µs | **1.00** |
+| 0.3 | 0.41 µs | 0.44 µs | **0.93** |
+
+Flat across 20 dB — the signature of an estimator limited by noise rather than
+by a systematic interpolation error. The coherent bound over the same runs is
+1.07 µs, i.e. 4.2× tighter and not reachable by this receiver.
+
+The Fisher information is computed two independent ways (analytically from the
+instantaneous frequency, and by a spectral derivative of the rendered waveform)
+and the two agree to 0.06%.
+
+### Detector behaviour
+
+| Check | Result |
+|---|---|
+| Classification confusion matrix, 4 waveforms × 25 trials at −4.4 dB | **100/100** correct |
+| False alarms, noise only, Pfa 1e-3 → 1e-7 | monotone, < 0.05/block at the tightest |
+| Two arrivals, 8 dB apart | both found, amplitude ratio recovered to 0.05 |
+| Streaming timestamps across blocks | exact |
+
+### A silent failure mode, reproduced and fixed
+
+CA-CFAR estimates noise from cells either side of a guard band. If the guard is
+narrower than the target's response, the target leaks into its own training
+cells and raises its own threshold — **the stronger the pulse, the higher the
+bar it must clear.** Nothing is reported and the detector looks healthy.
+
+A chirp compresses to ~`fs/B` cells and survives a small guard; a CW does not
+compress at all. Measured with a 32-cell guard against a 1920-sample CW
+response:
+
+| waveform | detected with a 32-cell guard | with `suggested_cfar_guard()` |
+|---|---|---|
+| CW | **0/20** | 20/20 |
+| LFM | 20/20 | 20/20 |
+
+Three of four waveforms still working is exactly what makes this bug hide.
+`analyzer_cfar_guard_must_clear_the_response` pins both halves.
+
+## 5. Build and runtime hygiene ✅
 
 | Configuration | Result |
 |---|---|
 | GCC 15.3, `-Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion -Wold-style-cast -Wcast-qual -Wdouble-promotion -Werror` | clean |
 | Clang 21.1, same set | clean |
-| AddressSanitizer + UndefinedBehaviorSanitizer | clean, 791 checks |
-| `Real = float` (`-DPHANTOM_REAL_FLOAT=ON`) | 791 checks pass |
-| Heap allocations during execution | **zero** — no `new`, `malloc`, `std::vector` or `std::string` in `src/` or `include/` |
+| AddressSanitizer + UndefinedBehaviorSanitizer | clean, 6106 checks |
+| `Real = float` (`-DPHANTOM_REAL_FLOAT=ON`) | 6106 checks pass |
+| Heap allocations during execution | **zero** — proven by `nm` over the built archive: the library references only libm and `memset` |
 
 ### float vs double
 
@@ -147,7 +264,7 @@ layers:
 acceptable if you are differencing travel times for ranging. Use `double` unless
 your FPU forces otherwise.
 
-## 5. Performance (measured, not claimed)
+## 6. Performance (measured, not claimed)
 
 13th Gen Intel Core i7-13620H, `-O3`, single thread:
 
@@ -158,7 +275,21 @@ your FPU forces otherwise.
 | `speed_at()` — 501-layer binary search | 16.6 ns |
 | **`trace_ray()` — per arc step** | **52 ns** (median) |
 | `trace_ray()` — full 100 km ray, 1132 arcs | 40.8 µs |
-| `analyze_sofar()` — 501 points | 543 ns |
+| `analyze_sofar()` — 501 points | 596 ns |
+| `fft_forward()` — 8192 points | 307 µs |
+| `matched_filter_apply()` — one template, 8192-point block | 580 µs |
+| `analyze_block()` — 4 templates | 2.26 ms |
+
+At 96 kHz with an 8192-point transform the block advance is 65.3 ms of audio, so
+a four-template bank runs about **29× real time on one core**, and end-to-end
+detection latency is **65 ms**, dominated by the block length rather than the
+arithmetic. Halving the transform halves the latency and halves the longest
+detectable pulse.
+
+The FFT is a plain radix-2 with no SIMD and is roughly an order of magnitude off
+a vendor-tuned transform. That is the price of the zero-dependency promise; the
+correlation is the only hot spot, and it is isolated behind `fft_forward()` /
+`fft_inverse()` if you would rather pay a dependency for it.
 
 ### On the "< 500 ns" requirement
 
@@ -173,7 +304,7 @@ actually constrains a control loop, and measures **52 ns**. Re-run
 guarantee; these numbers are not a substitute for WCET analysis on the target
 silicon.
 
-## 6. Self-consistent but NOT independently verified ⚠️
+## 7. Self-consistent but NOT independently verified ⚠️
 
 - **Chen-Millero against the published UNESCO check tables.** The
   implementation is cross-validated against two independent equations (§3),
@@ -187,7 +318,7 @@ silicon.
 - **Real measured T/S profiles.** Everything so far uses analytic profiles
   (Munk, linear, isovelocity). Feeding World Ocean Atlas / Argo data is v0.2.
 
-## 7. Known limitations — not bugs, scope ⚠️
+## 8. Known limitations — not bugs, scope ⚠️
 
 - **Shadow fraction depends on ray density.** Gaps between adjacent rays read as
   shadow. Measured convergence for the 100 km Munk case on a 500×250 grid:
@@ -217,22 +348,35 @@ silicon.
   frequency-dependent.
 - **2-D (range–depth) only.** No azimuthal coupling or out-of-plane refraction.
 
-## 8. Not implemented in v0.1
+## 9. Not implemented in v0.2
 
-`PhantomEchoSynthesizer` and `BioMimeticCommEngine` are not in this release. See
-`docs/roadmap.md` for what they will require, including the ping-analysis stage
-that has to exist before echo synthesis is meaningful.
+`EchoSynthesizer` and `BioMimeticCommEngine` are not in this release. See
+`docs/roadmap.md`.
 
----
+Known gaps within what *is* shipped:
+
+- **Cross-template ghosts.** A bank whose templates are not mutually orthogonal
+  reports a real arrival more than once: with the LFM and HFM sharing a band, an
+  LFM arrival produces an HFM response about **10.5 dB down** at a shifted lag.
+  That is the bank faithfully reporting a partial match, not a defect, but
+  suppressing it needs association logic across detections — a tracker's job,
+  and v0.3 work. Pinned by `analyzer_reports_cross_template_ghosts`.
+- **No Doppler bank.** Templates are zero-Doppler. A fast target degrades the
+  match (see §4); covering it means replicating the bank across Doppler bins.
+- **Range-Doppler bias is measured, not corrected.** The wideband formula is
+  verified but the analyser does not apply it, because doing so requires a
+  Doppler estimate the bank does not yet produce.
+- **No bearing estimation.** Single-channel; bearing needs an array.
 
 ## Reproducing
 
 ```bash
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
-./build/phantom_tests          # 791 checks
+./build/phantom_tests          # 6106 checks
 ./build/phantom_bench          # timing table above
 ./build/munk_simulation data   # CSV + console report
+./build/ping_intercept data    # streaming ping detection demo
 python3 tools/plot_rays.py data
 ```
 

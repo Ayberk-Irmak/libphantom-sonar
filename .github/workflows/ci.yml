@@ -188,6 +188,12 @@ jobs:
           grep -q "trapping cone      : +/- 14.38" report.txt
           test -s out/rays.csv
           test -s out/coverage.csv
+      - name: Run the ping intercept example
+        run: |
+          ./build/ping_intercept out | tee intercept.txt
+          # 5 pings present; a regression in the detector shows up here first.
+          grep -q "correctly detected   : 5" intercept.txt
+
       - uses: actions/upload-artifact@v4
         with:
           name: simulation-output

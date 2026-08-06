@@ -9,6 +9,7 @@
 
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <cstdio>
 
 namespace pt {
@@ -23,6 +24,46 @@ constexpr double tol(double double_build, double float_build) noexcept {
     return kRealIsFloat ? float_build : double_build;
 }
 
+
+// Deterministic RNG. The DSP tests are statistical -- estimator variance
+// against the Cramer-Rao bound, detection rates -- so they need randomness that
+// is identical on every machine and every run, or CI becomes a coin flip.
+// A 64-bit LCG is more than enough for Monte Carlo of this kind.
+class Rng {
+  public:
+    explicit Rng(std::uint64_t seed) noexcept : state_(seed * 2862933555777941757ULL + 1) {}
+
+    // Uniform in [0, 1).
+    double uniform01() noexcept {
+        state_ = state_ * 6364136223846793005ULL + 1442695040888963407ULL;
+        return static_cast<double>((state_ >> 11) & ((1ULL << 53) - 1))
+             / static_cast<double>(1ULL << 53);
+    }
+
+    // Uniform in [-1, 1).
+    double uniform() noexcept { return uniform01() * 2.0 - 1.0; }
+
+    // Standard normal, Box-Muller. Both values are used, so no sample is wasted.
+    double normal() noexcept {
+        if (have_spare_) {
+            have_spare_ = false;
+            return spare_;
+        }
+        double u1 = uniform01();
+        if (u1 < 1e-300) u1 = 1e-300;
+        const double u2 = uniform01();
+        const double r = std::sqrt(-2.0 * std::log(u1));
+        const double theta = 2.0 * 3.14159265358979323846 * u2;
+        spare_ = r * std::sin(theta);
+        have_spare_ = true;
+        return r * std::cos(theta);
+    }
+
+  private:
+    std::uint64_t state_;
+    double spare_ = 0.0;
+    bool   have_spare_ = false;
+};
 
 using TestFn = void (*)();
 

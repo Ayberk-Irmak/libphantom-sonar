@@ -5,7 +5,7 @@ Zero dependencies, zero heap allocation, C++20.
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 ![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)
-![Status](https://img.shields.io/badge/status-v0.1%20ray%20tracing-orange.svg)
+![Status](https://img.shields.io/badge/status-v0.2%20ray%20tracing%20%2B%20ping%20analysis-orange.svg)
 ![Validated](https://img.shields.io/badge/validated-vs%20Bellhop-brightgreen.svg)
 
 ![Munk deep sound channel propagation](data/munk_rays.png)
@@ -86,6 +86,59 @@ the residual halves every time this library's *output sampling* is doubled, so i
 is the comparison's chord-versus-arc error rather than a disagreement between the
 codes.
 
+**A ping analyser, because an echo synthesiser with no input is not a module.**
+Detecting and characterising the incoming ping is the harder half of a
+countermeasure, and the half with the latency budget — so it shipped first. A
+bank of matched filters (CW / LFM / HFM), CA-CFAR detection, and a Pulse
+Descriptor Word per arrival: time, type, centre frequency, bandwidth, chirp
+rate, amplitude, SNR.
+
+```
+Filter bank
+  [0] CW         12000 -  12000 Hz,  20.0 ms, TB =      0
+  [1] LFM-up      8000 -  20000 Hz,  20.0 ms, TB =    240
+  ...
+Detections
+  ToA (s)    type           amp    SNR dB    fc (Hz)   BW (Hz)
+  0.20000    LFM-up       0.977      29.5      14000     12000   <- ToA error +1.3 us
+  0.54998    CW           0.595      26.3      12000         0   <- ToA error -15.5 us
+  0.95000    HFM          0.326      19.0      14000     12000   <- ToA error +3.9 us
+```
+
+The arrival-time estimator is checked against the **Cramér-Rao bound** — not
+against another implementation, but against the best variance any unbiased
+estimator could achieve. It sits at **0.93–1.02× the bound across 20 dB of SNR**.
+
+Getting that comparison right required care: a magnitude detector is bounded by
+the RMS bandwidth about the centre frequency, not by `f_rms` about zero. For an
+8-20 kHz sweep those differ by 4.16×, so checking an envelope detector against
+the coherent bound would make an efficient estimator look four times worse than
+it is. Both are computed; [`docs/validation.md §4`](docs/validation.md) shows
+which applies and why.
+
+**Underwater Doppler is a time scaling, not a frequency shift.** With `c ≈ 1500
+m/s`, `v/c` is ~500× larger than for an airborne radar at the same speed, and
+that changes the engineering. Measured peak loss over a 60 ms 8-20 kHz sweep:
+
+| closing speed | CW | LFM | HFM |
+|---|---|---|---|
+| 5 m/s | — | −5.7 dB | **−0.05 dB** |
+| 15 m/s | — | −9.9 dB | **−0.14 dB** |
+| 30 m/s | — | −13.1 dB | **−0.30 dB** |
+
+which is why HFM dominates underwater: a time-scaled HFM is a *delayed* HFM.
+
+It also breaks the textbook LFM range-Doppler formula. The narrowband result
+uses the sweep's centre frequency; the wideband one uses its **end**:
+
+```
+dt = -(v/c) · f_end / mu
+```
+
+Verified on upsweeps, downsweeps and narrow sweeps — the narrowband formula is
+off by 13 samples on the 8-16 kHz case where the wideband form agrees within 3.
+Derivation in [`docs/math_spec.md §6.2`](docs/math_spec.md).
+
 **Verified against closed forms, not against baselines.** A recorded baseline
 tells you the code did not change. These tell you it is right:
 
@@ -96,10 +149,15 @@ tells you the code did not change. These tell you it is right:
 | Turning depth vs `c(z) = c₀/cos θ₀` | < 1e-6 m |
 | Range and travel-time budgets | exact to 1e-8 m / 1e-12 s |
 | Mackenzie vs Chen-Millero, common validity box | 0.53 m/s max disagreement |
+| FFT vs a direct O(N²) DFT sharing no code | 2.3e-16 relative |
+| FFT correlation vs direct O(N·L) correlation | 1.1e-15 relative |
+| Matched filter peak, width, coherent gain | `A·E/2`, `1/B`, `L/2` — all matched |
+| Waveform classification, 4 types at −4.4 dB SNR | 100/100 |
 
-791 checks. Clean under GCC 15 and Clang 21 with `-Wconversion -Wsign-conversion
+6106 checks. Clean under GCC 15 and Clang 21 with `-Wconversion -Wsign-conversion
 -Wold-style-cast -Wdouble-promotion -Werror`, and under ASan + UBSan. Passes in
-both `double` and `float` builds.
+both `double` and `float` builds. Zero allocation is proven by `nm` over the
+built archive, not asserted: the library references only libm and `memset`.
 
 ## Measured performance
 
@@ -112,7 +170,13 @@ both `double` and `float` builds.
 | `speed_at()` — 501-layer binary search | 16.6 ns |
 | **`trace_ray()` — per arc step** | **52 ns** |
 | `trace_ray()` — full 100 km ray (1132 arcs) | 40.8 µs |
-| `analyze_sofar()` — 501 points | 543 ns |
+| `analyze_sofar()` — 501 points | 596 ns |
+| `fft_forward()` — 8192 points | 307 µs |
+| `analyze_block()` — 4-template bank, 8192-point block | 2.26 ms |
+
+The ping analyser runs **29× real time on one core** at 96 kHz. Detection
+latency is 65 ms and is set by the block length, not the arithmetic — a pulse is
+only reported once the block containing it is complete.
 
 The budget is stated **per arc step**, which is the unit that constrains a
 control loop. A whole 100 km trace crosses ~1100 layers and does not belong in a
@@ -130,6 +194,7 @@ cmake --build build
 ./build/phantom_tests          # 791 checks
 ./build/phantom_bench          # the table above
 ./build/munk_simulation data   # CSV + channel analysis
+./build/ping_intercept data    # streaming ping detection, scored against truth
 python3 tools/plot_rays.py data
 
 # cross-validate against Bellhop (downloads and builds the Acoustics Toolbox)
@@ -193,6 +258,12 @@ Stated plainly, because the gaps matter more than the features:
   upper bound and always publish the ray count with it. The convergence table is
   in [`docs/validation.md §6`](docs/validation.md).
 - **2-D range–depth only.** No out-of-plane refraction.
+- **Cross-template ghosts.** A bank whose waveforms share a band reports one
+  arrival more than once — an LFM arrival lights the HFM template ~10.5 dB down
+  at a shifted lag. Correct behaviour for a matched filter bank; suppressing it
+  needs association logic, which is v0.4.
+- **Zero-Doppler templates and no bearing.** A fast target degrades the match
+  rather than being matched, and bearing needs an array.
 - **The Bellhop comparison covers geometry, not amplitude**, and only
   range-independent profiles — because that is all the library models. It is not
   evidence about transmission loss or range-dependent propagation.

@@ -5,6 +5,7 @@
 // in a sub-microsecond budget. Per-step is the number that actually constrains
 // a real-time control loop.
 #include "phantom/channel.hpp"
+#include "phantom/ping_analyzer.hpp"
 #include "phantom/profile.hpp"
 #include "phantom/ray_tracer.hpp"
 #include "phantom/sound_speed.hpp"
@@ -138,6 +139,88 @@ int main() {
         report("analyze_sofar()  [501 points]",
                static_cast<double>(std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count()) / kN,
                "call");
+    }
+
+    // ---- ping analysis chain ------------------------------------------------
+    {
+        constexpr Real        kFs  = 96000;
+        constexpr std::size_t kFft = 8192;
+        static FftPlan<kFft> plan;
+        static std::array<Complex, kFft> buf{};
+        static std::array<Real, kFft> block{};
+
+        for (std::size_t i = 0; i < kFft; ++i) {
+            buf[i] = Complex(static_cast<Real>(i % 97), 0);
+            block[i] = static_cast<Real>((i % 211) - 105) / static_cast<Real>(105);
+        }
+
+        std::printf("\n  ping analysis, %zu-point transform at %.0f kHz\n",
+                    kFft, static_cast<double>(kFs) / 1000.0);
+
+        {
+            constexpr int kN = 4000;
+            const auto t0 = Clock::now();
+            for (int i = 0; i < kN; ++i) plan.forward(buf);
+            const auto t1 = Clock::now();
+            std::printf("  %-34s %9.1f us / transform\n", "fft_forward()",
+                        static_cast<double>(std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count())
+                            / kN / 1000.0);
+        }
+
+        static PulseBank<8, kFft> bank(kFs);
+        auto mk = [](PulseType t, Real f0, Real f1, Real d) {
+            PulseSpec s;
+            s.type = t; s.f_start_hz = f0; s.f_end_hz = f1; s.duration_s = d;
+            return s;
+        };
+        bank.add(mk(PulseType::Cw, 12000, 12000, static_cast<Real>(0.02)));
+        bank.add(mk(PulseType::LfmUp, 8000, 20000, static_cast<Real>(0.02)));
+        bank.add(mk(PulseType::LfmDown, 20000, 8000, static_cast<Real>(0.02)));
+        bank.add(mk(PulseType::Hfm, 8000, 20000, static_cast<Real>(0.02)));
+
+        static AnalyzerScratch<kFft> scratch;
+        DetectorConfig cfg;
+        cfg.cfar_guard = suggested_cfar_guard(bank.view());
+        cfg.cfar_train = 256;
+        cfg.threshold_alpha = cfar_alpha(512, static_cast<Real>(1e-6));
+        cfg.dead_time_s = static_cast<Real>(0.005);
+        std::array<PulseDescriptor, 16> pdw{};
+
+        {
+            constexpr int kN = 2000;
+            static std::array<Complex, kFft> corr{};
+            const MatchedFilter& mf = bank.view().templates[1].filter;
+            const auto t0 = Clock::now();
+            for (int i = 0; i < kN; ++i) {
+                matched_filter_apply(bank.view().fft, mf, block, scratch.view().fft_scratch, corr);
+            }
+            const auto t1 = Clock::now();
+            std::printf("  %-34s %9.1f us / block\n", "matched_filter_apply()  1 template",
+                        static_cast<double>(std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count())
+                            / kN / 1000.0);
+        }
+
+        constexpr int kN = 1000;
+        const auto t0 = Clock::now();
+        for (int i = 0; i < kN; ++i) {
+            analyze_block(bank.view(), cfg, block, 0, scratch.view(), pdw);
+        }
+        const auto t1 = Clock::now();
+        const double us_per_block =
+            static_cast<double>(std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count())
+            / kN / 1000.0;
+
+        const double stride_s = static_cast<double>(bank.stride()) / static_cast<double>(kFs);
+        std::printf("  %-34s %9.1f us / block\n", "analyze_block()  4 templates", us_per_block);
+        std::printf("\n  block advance %zu samples = %.1f ms of audio\n",
+                    bank.stride(), stride_s * 1000.0);
+        std::printf("  real-time factor              %9.0f x  (one core)\n",
+                    stride_s * 1e6 / us_per_block);
+        std::printf("  worst-case detection latency  %9.1f ms\n", stride_s * 1000.0 + us_per_block / 1000.0);
+        std::printf("\n  Latency is dominated by the block length, not the arithmetic: a\n"
+                    "  pulse is only reported once the block containing it is complete.\n"
+                    "  Halve the transform to halve the latency, at the cost of a shorter\n"
+                    "  longest detectable pulse.\n");
     }
 
     std::printf("--------------------------------------------------------------\n");

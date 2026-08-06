@@ -250,3 +250,175 @@ caustic amplitude. Those are v0.3 work (see `docs/roadmap.md`).
 - Munk, "Sound channel in an exponentially stratified ocean, with application to
   SOFAR", *JASA* 55(2), 1974.
 - Porter, *The BELLHOP Manual and User's Guide*, HLS Research, 2011.
+
+---
+
+## 5. Active sonar pulse synthesis
+
+Phase is evaluated in closed form at every sample rather than accumulated, so
+there is no phase drift to integrate over a long pulse.
+
+### 5.1 CW
+
+```
+f(t) = f0
+phi(t) = 2 pi f0 t
+```
+
+Zero bandwidth, so **no pulse compression and no range resolution**: its matched
+filter output is a triangle as wide as the pulse. Excellent Doppler resolution,
+which is the trade.
+
+### 5.2 LFM — linear FM
+
+```
+f(t)   = f0 + mu t,           mu = (f1 - f0) / T
+phi(t) = 2 pi (f0 t + mu t^2 / 2)
+```
+
+Range resolution `1/B` regardless of pulse length. The cost is range-Doppler
+coupling — see §6.2.
+
+### 5.3 HFM — hyperbolic FM
+
+The *period* is linear in time, hence the name:
+
+```
+1/f(t) = 1/f0 + k t,          k = (1/f1 - 1/f0) / T
+f(t)   = 1 / (1/f0 + k t)
+phi(t) = (2 pi / k) ln(1 + k f0 t)
+```
+
+As `k -> 0` this must fall back to the CW form: `ln(1+x) ~ x` gives
+`phi -> 2 pi f0 t`, but the coded expression divides by `k`, so the
+implementation switches to the linear branch below `|k f0 T| < 1e-9`.
+
+**Why HFM matters underwater.** A time-scaled HFM is, to first order, a *delayed*
+HFM — the scaling maps the family onto itself. So the matched filter peak
+survives Doppler almost intact. Measured over a 60 ms 8-20 kHz sweep:
+
+| closing speed | LFM peak loss | HFM peak loss |
+|---|---|---|
+| 5 m/s | −5.7 dB | −0.05 dB |
+| 15 m/s | −9.9 dB | −0.14 dB |
+| 30 m/s | −13.1 dB | −0.30 dB |
+
+---
+
+## 6. Matched filtering
+
+Correlating a **real** received signal against a **complex** (analytic) replica
+yields the complex envelope directly, with no separate basebanding stage:
+
+```
+y[n] = sum_k x[n+k] conj(r[k])
+```
+
+Implemented as FFT overlap-save. Circular aliasing confines the valid outputs to
+lags `[0, M-L]`, which is `M-L+1` usable lags per block and exactly the block
+advance.
+
+### 6.1 What the peak means
+
+For `x[k] = A cos(phi_k)` and `r[k] = a_k exp(j phi_k)`:
+
+```
+y = sum a_k^2 ( (1 + cos 2phi_k)/2  -  j sin(2phi_k)/2 )  ->  A E / 2
+```
+
+the double-frequency terms averaging away. Hence:
+
+- **peak magnitude** `= A E / 2`, which inverts to give the received amplitude
+- **coherent gain** `= L / 2` — the factor of two is the half of a real signal's
+  energy in the negative-frequency half-plane that an analytic replica discards
+- **compressed width** `~ 1/B`, measured at 83 µs for `B = 12 kHz`
+
+### 6.2 Range-Doppler coupling — the wideband form
+
+The textbook narrowband result is `dt = -f_doppler / mu` with the Doppler shift
+taken at the **centre** frequency. **That formula is wrong underwater.**
+
+Doppler here is a time *scaling*, not a frequency shift. With `alpha = 1 + v/c`:
+
+```
+phi_rx(t) = 2 pi (alpha f0 t + mu alpha^2 t^2 / 2)
+```
+
+so the received chirp rate is `mu alpha^2` and the received duration `T/alpha`.
+Writing the residual phase against the replica and minimising it over the
+overlap — the least-squares linear fit to `t^2` on `[0,T']` has slope `T'` —
+gives
+
+```
+dt = -(v/c) * f_end / mu,        f_end = f0 + mu T
+```
+
+the **end** of the sweep, not its centre. For an 8-16 kHz upsweep the two differ
+by 33%, and the error does not vanish at low speed. Verified against the tracer
+for upsweeps, downsweeps and narrow sweeps in
+`matched_filter_lfm_range_doppler_coupling_matches_theory`.
+
+The derivation assumes the peak survives; above roughly 5 dB of Doppler loss the
+peak is too degraded for the expression to mean anything.
+
+---
+
+## 7. Detection and estimation
+
+### 7.1 CA-CFAR
+
+Threshold = `alpha` times the mean power of the training cells either side of a
+guard band. For exponentially distributed output power,
+
+```
+alpha = N (Pfa^(-1/N) - 1)
+```
+
+for `N` training cells.
+
+**The guard band must exceed the width of the response being detected.**
+Otherwise the target leaks into its own training cells, raises its own
+threshold, and is never detected — the stronger the pulse, the higher the bar it
+must clear. A chirp compresses to about `fs/B` cells; a CW does not compress at
+all, so its response is as wide as the pulse. `suggested_cfar_guard()` returns
+the longest replica length for this reason. See
+`analyzer_cfar_guard_must_clear_the_response`, which reproduces the silent
+failure and its fix.
+
+### 7.2 Arrival-time estimation and the two Cramér-Rao bounds
+
+For delay estimation in white Gaussian noise of per-sample variance `sigma^2`,
+with delay in samples,
+
+```
+var(tau) >= sigma^2 / F,     F = sum_n (ds/dn)^2 = (A^2/2) sum_n (2 pi f_n / fs)^2
+```
+
+**Which bound applies depends on the receiver**, and confusing the two makes an
+efficient estimator look four times worse than it is:
+
+| bound | frequencies measured about | achievable by |
+|---|---|---|
+| **coherent** | zero — driven by `f_rms` | a receiver tracking absolute carrier phase |
+| **envelope** | the centre frequency — driven by RMS *bandwidth* | a magnitude detector |
+
+For an 8-20 kHz sweep these differ by `f_rms / B_rms = 14.4 / 3.46 = 4.16` in
+standard deviation. This library is an envelope detector, so the envelope bound
+is the relevant one — and carrier-coherent processing is not merely
+unimplemented, it needs absolute phase, which Doppler destroys.
+
+Measured across 30 dB of SNR, the estimator sits at **0.93–1.02 ×** the envelope
+bound.
+
+---
+
+## References (added for §5-7)
+
+- Van Trees, *Detection, Estimation, and Modulation Theory, Part III*, Wiley 1971
+  — ambiguity functions and the delay-estimation bounds.
+- Kay, *Fundamentals of Statistical Signal Processing: Estimation Theory*,
+  Prentice Hall 1993 — Cramér-Rao bounds, Ch. 3.
+- Richards, *Fundamentals of Radar Signal Processing*, 2nd ed., McGraw-Hill 2014
+  — pulse compression, CA-CFAR.
+- Kroszczynski, "Pulse compression by means of linear-period modulation",
+  *Proc. IEEE* 57(7), 1969 — the HFM/Doppler-invariance result.
