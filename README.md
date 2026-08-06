@@ -5,7 +5,7 @@ Zero dependencies, zero heap allocation, C++20.
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 ![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)
-![Status](https://img.shields.io/badge/status-v0.3%20tracing%20%2B%20analysis%20%2B%20echo-orange.svg)
+![Status](https://img.shields.io/badge/status-v0.4%20ray--acoustics%20coupled-orange.svg)
 ![Validated](https://img.shields.io/badge/validated-vs%20Bellhop-brightgreen.svg)
 
 ![Munk deep sound channel propagation](data/munk_rays.png)
@@ -139,6 +139,48 @@ Verified on upsweeps, downsweeps and narrow sweeps — the narrowband formula is
 off by 13 samples on the 8-16 kHz case where the wideband form agrees within 3.
 Derivation in [`docs/math_spec.md §6.2`](docs/math_spec.md).
 
+**Eigenrays, and spreading loss that reduces exactly to the closed form.** An
+eigenray is a launch angle that reaches a given receiver. The search is exact
+rather than interpolated: the tracer already stops on a range budget to machine
+precision, so setting that budget to the receiver range makes the ray's final
+point *the arrival*.
+
+Geometric spreading then comes from the ray tube — the derivative of arrival
+depth with respect to launch angle:
+
+```
+TL = -10 log10[ c_rcv cos(θ₀) / (c_src · r · cos(θ_rcv) · |dz/dθ₀|) ]
+```
+
+In isovelocity water that must reduce to `20 log10(R)`. It does, to **0.0000 dB**
+across nine geometries from 1 to 20 km — with the Jacobian obtained by finite
+difference *through the tracer*, so the agreement exercises the search, the
+arc-length accumulator and the formula at once.
+
+| range | offset | ray-tube TL | 20 log10(R) | difference |
+|---|---|---|---|---|
+| 1 km | 500 m | 60.9691 | 60.9691 | 0.0000 |
+| 5 km | 2500 m | 74.9485 | 74.9485 | 0.0000 |
+| 20 km | 3000 m | 86.1172 | 86.1172 | 0.0000 |
+
+**Multipath the ocean chooses, not the caller.** Feed the eigenrays to the echo
+synthesiser and the reply carries the arrival structure of the water it is
+transmitted into:
+
+```
+Multipath from the ray tracer
+      launch     t (ms)      srf      btm    TL (dB)
+     -6.498d   1656.190        1        0      77.93
+     -5.436d   1655.550        0        0      73.56
+      8.952d   1690.677        0        1      72.00
+  -> 3 echoes spanning 70.25 ms two-way
+```
+
+**Caustics are flagged, not answered.** Where neighbouring rays cross, the tube
+collapses and ray theory predicts infinite intensity. That is a failure of the
+method, not a property of the ocean, so the library refuses to report a level
+rather than returning a number that looks like one.
+
 **Doppler is where underwater differs from radar, and the bank sizing shows it.**
 A zero-Doppler template detects a moving target but does not match it. How many
 Doppler bins a bank needs is a property of the waveform — derived per family and
@@ -212,12 +254,14 @@ tells you the code did not change. These tell you it is right:
 | Turning depth vs `c(z) = c₀/cos θ₀` | < 1e-6 m |
 | Range and travel-time budgets | exact to 1e-8 m / 1e-12 s |
 | Mackenzie vs Chen-Millero, common validity box | 0.53 m/s max disagreement |
+| Ray-tube spreading vs 20 log10(R), 9 geometries | 0.0000 dB |
+| Thorp absorption vs the published formula | within 10% (what the fit is worth) |
 | FFT vs a direct O(N²) DFT sharing no code | 2.3e-16 relative |
 | FFT correlation vs direct O(N·L) correlation | 1.1e-15 relative |
 | Matched filter peak, width, coherent gain | `A·E/2`, `1/B`, `L/2` — all matched |
 | Waveform classification, 4 types at −4.4 dB SNR | 100/100 |
 
-6226 checks. Clean under GCC 15 and Clang 21 with `-Wconversion -Wsign-conversion
+6440 checks. Clean under GCC 15 and Clang 21 with `-Wconversion -Wsign-conversion
 -Wold-style-cast -Wdouble-promotion -Werror`, and under ASan + UBSan. Passes in
 both `double` and `float` builds. Zero allocation is proven by `nm` over the
 built archive, not asserted: the library references only libm and `memset`.
@@ -258,7 +302,7 @@ cmake --build build
 ./build/phantom_bench          # the table above
 ./build/munk_simulation data   # CSV + channel analysis
 ./build/ping_intercept data    # streaming ping detection, scored against truth
-./build/countermeasure_loop    # intercept -> classify -> reply, scored
+./build/countermeasure_loop    # intercept -> classify -> reply -> multipath
 python3 tools/plot_rays.py data
 
 # cross-validate against Bellhop (downloads and builds the Acoustics Toolbox)
@@ -331,9 +375,14 @@ Stated plainly, because the gaps matter more than the features:
   deliberately in `countermeasure_loop`.
 - **Doppler is quantised and the range bias is measured, not corrected.**
 - **No bearing.** Single channel; bearing needs an array.
-- **Echo levels are specified, not computed.** Target strength is a dB figure,
-  not the output of a scattering model, and there is no transmission loss along
-  the traced path yet. That coupling is v0.4.
+- **Ray theory, with its caustics.** Levels near a caustic are flagged rather
+  than computed; a correct treatment needs a wave solution through them.
+- **No bottom loss model.** Reflection is specular and lossless, so a
+  bottom-bounced path is reported louder than it really is.
+- **Monostatic only.** Multipath echoes assume the return travels the way the
+  ping came; a bistatic geometry needs two path sets.
+- **Target strength is still a dB figure**, not the output of a scattering
+  model.
 - **A Doppler bank is megabytes** — 8 MB at 64 templates and an 8192-point
   transform — and must not go on the stack.
 - **The Bellhop comparison covers geometry, not amplitude**, and only

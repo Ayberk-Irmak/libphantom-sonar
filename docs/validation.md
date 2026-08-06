@@ -310,14 +310,100 @@ cannot match phase at more than one bearing) and the latency floor (a canceller
 cannot invert a sample it has not received). **Generating false targets is the
 achievable countermeasure; cancelling the real one is not.**
 
-## 6. Build and runtime hygiene ✅
+## 6. Eigenrays, transmission loss and multipath — verified ✅
+
+### Spreading loss against the closed form
+
+The load-bearing check of the whole module. In isovelocity water with no
+boundaries the eigenray is a straight line and the ray-tube formula must reduce
+*exactly* to `20 log10(R)`. The Jacobian is obtained by finite difference
+through the tracer, so agreement exercises the search, the arc-length
+accumulator and the formula at once.
+
+| range | depth offset | ray-tube TL | 20 log10(R) | difference |
+|---|---|---|---|---|
+| 1 km | 0 / 200 / 500 m | 60.0000 / 60.1703 / 60.9691 | same | **0.0000 dB** |
+| 5 km | 0 / 1000 / 2500 m | 73.9794 / 74.1497 / 74.9485 | same | **0.0000 dB** |
+| 20 km | 0 / 1000 / 3000 m | 86.0206 / 86.0314 / 86.1172 | same | **0.0000 dB** |
+
+Worst departure across all nine geometries: **0.00000 dB** in double,
+0.0009 dB in float.
+
+### Eigenray geometry
+
+Isovelocity, source 1000 m, receiver 1600 m at 5 km:
+
+| quantity | traced | geometric |
+|---|---|---|
+| launch angle | 6.842773° | 6.842773° |
+| path length | 5035.871 m | 5035.871 m (slant) |
+| travel time | matched to 1e-7 relative | slant/1500 |
+| Jacobian dz/dθ₀ | 5072.000 m/rad | 5072.000 (r/cos²θ₀) |
+
+### Multipath structure
+
+A 200 m duct at 3 km with a ±25° fan yields **14 eigenrays**, ordered in launch
+angle, each with distinct bounce counts from 0/0 up to 4/3. Every path is at
+least as long as the straight line, every bounced path strictly longer, and
+travel times run 1993–2191 ms — a 200 ms spread that is real, not numerical.
+
+### Absorption
+
+Thorp (1967), against the published formula evaluated independently:
+
+| f | computed | published | over 3 km |
+|---|---|---|---|
+| 1 kHz | 0.069 | 0.069 | 0.21 dB |
+| 10 kHz | 1.187 | 1.19 | 3.6 dB |
+| 100 kHz | 34.07 | 34.1 | 102 dB |
+
+Monotone across 1–30 kHz in 500 Hz steps. Tolerances are set at ~10%, which is
+what Thorp is: a fit at about 4 °C with no temperature or depth dependence.
+
+### Coupling: multipath echoes from traced paths
+
+Eigenrays → `EchoSpec`s → rendered waveform → energy present at every predicted
+delay. Delays are referenced to the first arrival (one is exactly zero, none
+negative), levels to the strongest path, and the requested target strength lands
+on the strongest path exactly.
+
+**The two halves cross-check.** In `countermeasure_loop` an 8 m/s ping falls in
+the 12 m/s Doppler bin, and the 4 m/s residual produces an arrival-time error of
++0.0885 ms — exactly what the wideband range-Doppler formula of §4 predicts. CI
+asserts both numbers.
+
+### A precision limit worth knowing about
+
+`depth_tolerance_m` **discards** roots it cannot polish, so setting it tighter
+than the build can achieve removes paths silently rather than degrading them.
+Measured on the 200 m duct at 3 km, 14 paths present:
+
+| tolerance | double | float |
+|---|---|---|
+| 0.001 m | 14 | **0** |
+| 0.010 m | 14 | **3** |
+| 0.050 m | 14 | 11 |
+| 0.100 m | 14 | 14 |
+
+The default now follows the build (0.01 m double, 0.1 m float). Single precision
+cannot resolve the receiver better than ~0.1 m at this range because the
+tracer's own depth error there is larger.
+
+### Caustics
+
+Where the ray tube collapses, ray theory predicts infinite intensity. The search
+flags such paths and leaves the level at zero rather than reporting a number.
+Verified both directly (`spreading_loss_db` with a zero Jacobian returns 0) and
+through the search in the Munk channel.
+
+## 7. Build and runtime hygiene ✅
 
 | Configuration | Result |
 |---|---|
 | GCC 15.3, `-Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion -Wold-style-cast -Wcast-qual -Wdouble-promotion -Werror` | clean |
 | Clang 21.1, same set | clean |
-| AddressSanitizer + UndefinedBehaviorSanitizer | clean, 6226 checks |
-| `Real = float` (`-DPHANTOM_REAL_FLOAT=ON`) | 6226 checks pass |
+| AddressSanitizer + UndefinedBehaviorSanitizer | clean, 6440 checks |
+| `Real = float` (`-DPHANTOM_REAL_FLOAT=ON`) | 6440 checks pass |
 | Heap allocations during execution | **zero** — proven by `nm` over the built archive: the library references only libm and `memset` |
 
 ### float vs double
@@ -335,7 +421,7 @@ layers:
 acceptable if you are differencing travel times for ranging. Use `double` unless
 your FPU forces otherwise.
 
-## 7. Performance (measured, not claimed)
+## 8. Performance (measured, not claimed)
 
 13th Gen Intel Core i7-13620H, `-O3`, single thread:
 
@@ -375,7 +461,7 @@ actually constrains a control loop, and measures **52 ns**. Re-run
 guarantee; these numbers are not a substitute for WCET analysis on the target
 silicon.
 
-## 8. Self-consistent but NOT independently verified ⚠️
+## 9. Self-consistent but NOT independently verified ⚠️
 
 - **Chen-Millero against the published UNESCO check tables.** The
   implementation is cross-validated against two independent equations (§3),
@@ -389,7 +475,7 @@ silicon.
 - **Real measured T/S profiles.** Everything so far uses analytic profiles
   (Munk, linear, isovelocity). Feeding World Ocean Atlas / Argo data is v0.2.
 
-## 9. Known limitations — not bugs, scope ⚠️
+## 10. Known limitations — not bugs, scope ⚠️
 
 - **Shadow fraction depends on ray density.** Gaps between adjacent rays read as
   shadow. Measured convergence for the 100 km Munk case on a 500×250 grid:
@@ -419,39 +505,39 @@ silicon.
   frequency-dependent.
 - **2-D (range–depth) only.** No azimuthal coupling or out-of-plane refraction.
 
-## 10. Not implemented in v0.3
+## 11. Not implemented in v0.4
 
 `BioMimeticCommEngine` is not in this release. See `docs/roadmap.md`.
 
 Known gaps within what *is* shipped:
 
-- **Cross-template ghosts.** A bank whose templates share a band reports one
-  arrival more than once — LFM and HFM over the same sweep produce a ~10.5 dB
-  ghost at a shifted lag. Correct behaviour for a matched filter bank;
-  suppressing it needs association logic across detections.
-- **A bank only resolves what it spans.** An echo with `length_scale` 1.4 is a
-  28 ms pulse; a bank of 20 ms templates detects it by a mismatched replica and
-  reports both its time and its type wrongly. Demonstrated deliberately in
-  `countermeasure_loop`.
-- **Doppler is quantised, and the range bias is not corrected.** The wideband
-  coupling is verified and predicted, but the analyser does not subtract it —
-  doing so needs a Doppler estimate finer than the bin grid.
-- **No bearing estimation.** Single-channel; bearing needs an array.
-- **Memory.** A Doppler bank costs `MaxTemplates * FftSize * sizeof(Complex)`:
-  8 MB at 64 templates and an 8192-point transform. It must not go on the stack.
-- **No transmission loss or target strength modelling from geometry.** Echo
-  levels are specified in dB, not computed from a scattering model.
+- **Ray theory, with its caustics.** Levels near a caustic are flagged, not
+  computed. A correct treatment needs a wave solution through the caustic.
+- **No bottom loss model.** Reflection is specular and lossless; real sediment
+  reflection is grazing-angle and frequency dependent, and a bottom-bounced path
+  is therefore reported louder than it would be.
+- **Monostatic only.** `echoes_from_eigenrays` assumes the echo returns along
+  the path the ping arrived on. A bistatic geometry needs two path sets.
+- **No surface scattering or bubble loss**, both of which matter in sea state.
+- **Range-independent ocean.** No bathymetry, fronts or eddies; the eigenray
+  search inherits that from the tracer.
+- **Cross-template ghosts** in the analyser bank (§5), unchanged.
+- **A bank only resolves what it spans** — an echo stretched beyond the
+  templates is mis-reported in time and type.
+- **No bearing.** Single channel.
+- **Memory.** A Doppler bank is `MaxTemplates * FftSize * sizeof(Complex)`,
+  8 MB at 64 templates; it must not go on the stack.
 
 ## Reproducing
 
 ```bash
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
-./build/phantom_tests          # 6226 checks
+./build/phantom_tests          # 6440 checks
 ./build/phantom_bench          # timing table above
 ./build/munk_simulation data   # CSV + console report
 ./build/ping_intercept data    # streaming ping detection demo
-./build/countermeasure_loop    # intercept -> classify -> reply, scored
+./build/countermeasure_loop    # intercept -> classify -> reply -> multipath
 python3 tools/plot_rays.py data
 ```
 

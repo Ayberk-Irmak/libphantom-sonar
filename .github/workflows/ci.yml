@@ -202,6 +202,9 @@ jobs:
           grep -q "error +0.0885" loop.txt
           grep -q "dt = -(v/c) f_end/mu = +0.0885 ms" loop.txt
           grep -q "ghosts resolved    : 3" loop.txt
+          # The ray tracer must still be supplying the multipath structure.
+          grep -q "Multipath from the ray tracer" loop.txt
+          grep -qE "-> [0-9]+ echoes spanning" loop.txt
 
       - uses: actions/upload-artifact@v4
         with:

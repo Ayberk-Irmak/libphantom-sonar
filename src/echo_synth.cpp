@@ -80,6 +80,44 @@ std::size_t synthesize_echo(const PulseDescriptor& pdw,
     return render_real_doppler(spec, sample_rate_hz, doppler, out);
 }
 
+std::size_t echoes_from_eigenrays(std::span<const Eigenray> paths,
+                                 Real range_m,
+                                 Real frequency_hz,
+                                 Real source_speed_mps,
+                                 Real target_strength_db,
+                                 std::span<EchoSpec> out) noexcept {
+    if (paths.empty() || out.empty()) return 0;
+
+    // Two-way loss along each path, and the earliest arrival to reference to.
+    Real earliest = paths[0].travel_time_s;
+    Real best_loss = kZero;
+    bool have_best = false;
+    for (const Eigenray& p : paths) {
+        if (p.travel_time_s < earliest) earliest = p.travel_time_s;
+        if (p.near_caustic) continue;   // level not trustworthy; see Eigenray
+        const Real loss = kTwo * transmission_loss_db(p, range_m, frequency_hz,
+                                                      source_speed_mps);
+        if (!have_best || loss < best_loss) { best_loss = loss; have_best = true; }
+    }
+    if (!have_best) return 0;
+
+    std::size_t written = 0;
+    for (const Eigenray& p : paths) {
+        if (written >= out.size()) break;
+        if (p.near_caustic) continue;
+        const Real loss = kTwo * transmission_loss_db(p, range_m, frequency_hz,
+                                                      source_speed_mps);
+        EchoSpec& e = out[written++];
+        e.range_offset_m = kZero;
+        // Two-way travel time along this path, relative to the first arrival.
+        e.extra_delay_s = kTwo * (p.travel_time_s - earliest);
+        e.target_strength_db = target_strength_db - (loss - best_loss);
+        e.radial_velocity_mps = kZero;
+        e.length_scale = kOne;
+    }
+    return written;
+}
+
 std::size_t swarm_length(const PulseDescriptor& pdw,
                          std::span<const EchoSpec> echoes,
                          Real sample_rate_hz,
@@ -89,7 +127,7 @@ std::size_t swarm_length(const PulseDescriptor& pdw,
     std::size_t furthest = 0;
     for (const EchoSpec& e : echoes) {
         if (!(e.length_scale > kZero)) continue;
-        const Real delay = echo_delay_s(e.range_offset_m, sound_speed_mps);
+        const Real delay = echo_delay_s(e.range_offset_m, sound_speed_mps) + e.extra_delay_s;
         if (delay < kZero) continue;   // a ghost cannot arrive before the ping
         const Real alpha = echo_doppler_scale(e.radial_velocity_mps, sound_speed_mps);
         const Real dur = pdw.duration_s * e.length_scale / alpha;
@@ -110,7 +148,7 @@ std::size_t synthesize_swarm(const PulseDescriptor& pdw,
     for (std::size_t i = 0; i < need; ++i) out[i] = kZero;
 
     for (const EchoSpec& e : echoes) {
-        const Real delay = echo_delay_s(e.range_offset_m, sound_speed_mps);
+        const Real delay = echo_delay_s(e.range_offset_m, sound_speed_mps) + e.extra_delay_s;
         if (delay < kZero) continue;
         const auto offset = static_cast<std::size_t>(delay * sample_rate_hz);
         if (offset >= need) continue;

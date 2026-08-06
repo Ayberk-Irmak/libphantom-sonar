@@ -13,6 +13,7 @@ namespace {
 
 constexpr Real kZero = static_cast<Real>(0);
 constexpr Real kOne  = static_cast<Real>(1);
+constexpr Real kTwoLocal = static_cast<Real>(2);
 
 // |dc/dz| below this is treated as an isovelocity layer. At 1e-12 s^-1 a ray
 // would need >1e9 m of range to deviate one metre, so the branch is safe.
@@ -118,10 +119,12 @@ TraceResult trace_ray(const ProfileView& svp,
         const Real dt     = r_left / c;
         if (t + dt > cfg.max_time_s) {
             const Real dt_cap = cfg.max_time_s - t;
+            res.path_length_m += dt_cap * c;
             r += dt_cap * c;
             t  = cfg.max_time_s;
             res.status = TraceStatus::MaxTime;
         } else {
+            res.path_length_m += r_left;
             r = cfg.max_range_m;
             t += dt;
             res.status = TraceStatus::MaxRange;
@@ -160,6 +163,7 @@ TraceResult trace_ray(const ProfileView& svp,
             dr_end  = (sin_th - sin_end) / (xi * g_layer);
         }
         r += (dr_end > kZero) ? dr_end : kZero;
+        res.path_length_m += dt_left * ((c + c_end) / kTwoLocal);
         t  = cfg.max_time_s;
         z  = clamp(z_end, z_top, z_bot);
         c  = c_end;
@@ -228,14 +232,26 @@ TraceResult trace_ray(const ProfileView& svp,
         // --- 3. Closed-form range and time increments -----------------------
         Real dr;
         Real dt;
+        Real ds;   // arc length of this segment
         if (!iso) {
             dr = (xi > kXiEps) ? (sin_th - sin_target) / (xi * g) : kZero;
             dt = arc_time(c, sin_th, c_target, sin_target, g);
+            // On a circular arc of radius R = 1/(xi|g|) the length is R|dtheta|.
+            // For a vertical ray xi -> 0 and R diverges, but the path is then
+            // simply the depth change.
+            if (xi > kXiEps) {
+                const Real th1 = std::asin(clamp(sin_th, -kOne, kOne));
+                const Real th2 = std::asin(clamp(sin_target, -kOne, kOne));
+                ds = std::fabs(th1 - th2) / (xi * std::fabs(g));
+            } else {
+                ds = std::fabs(z_target - z);
+            }
         } else {
             const Real dz     = z_target - z;
             const Real abs_sn = std::fabs(sin_th);
             dr = (abs_sn > kSinEps) ? dz * (xi * c) / sin_th : kZero;
             dt = (abs_sn > kSinEps) ? std::fabs(dz) / (c * abs_sn) : kZero;
+            ds = (abs_sn > kSinEps) ? std::fabs(dz) / abs_sn : kZero;
         }
         if (dr < kZero) dr = kZero;  // guards against catastrophic cancellation
 
@@ -261,6 +277,15 @@ TraceResult trace_ray(const ProfileView& svp,
             if (t + dt_end > cfg.max_time_s) { clip_to_time(g, iso); break; }
             r = cfg.max_range_m;
             t += dt_end;
+            if (!iso && xi > kXiEps) {
+                const Real th1 = std::asin(clamp(sin_th, -kOne, kOne));
+                const Real th2 = std::asin(clamp(sin_end, -kOne, kOne));
+                res.path_length_m += std::fabs(th1 - th2) / (xi * std::fabs(g));
+            } else {
+                const Real cos_th = xi * c;
+                res.path_length_m += (cos_th > kZero) ? r_left / cos_th
+                                                      : std::fabs(z_end - z);
+            }
             z = clamp(z_end, z_top, z_bot);
             c = c_end;
             sin_th = sin_end;
@@ -277,6 +302,7 @@ TraceResult trace_ray(const ProfileView& svp,
         const bool stalled = (dr < kDepthEps) && (std::fabs(z_target - z) < kDepthEps);
         r += dr;
         t += dt;
+        res.path_length_m += (ds > kZero) ? ds : kZero;
         z  = z_target;
         c  = c_target;
         sin_th = sin_target;

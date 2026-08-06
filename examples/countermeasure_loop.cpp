@@ -10,6 +10,7 @@
 //
 //   ./countermeasure_loop
 #include "phantom/echo_synth.hpp"
+#include "phantom/eigenray.hpp"
 #include "phantom/ping_analyzer.hpp"
 #include "phantom/profile.hpp"
 #include "phantom/sound_speed.hpp"
@@ -176,10 +177,10 @@ int main() {
     // Four ghosts: one near the true position and three spread beyond it, with
     // decreasing target strength so the set looks like a dispersed formation.
     const EchoSpec swarm[] = {
-        {static_cast<Real>(8),  static_cast<Real>(-2),  static_cast<Real>(3), 1},
-        {static_cast<Real>(20), static_cast<Real>(-5),  static_cast<Real>(0), static_cast<Real>(1.4)},
-        {static_cast<Real>(32), static_cast<Real>(-8),  static_cast<Real>(-4), 1},
-        {static_cast<Real>(44), static_cast<Real>(-11), static_cast<Real>(6), 1},
+        {.range_offset_m = 8,  .target_strength_db = -2,  .radial_velocity_mps = 3},
+        {.range_offset_m = 20, .target_strength_db = -5,  .length_scale = static_cast<Real>(1.4)},
+        {.range_offset_m = 32, .target_strength_db = -8,  .radial_velocity_mps = -4},
+        {.range_offset_m = 44, .target_strength_db = -11, .radial_velocity_mps = 6},
     };
     const std::span<const EchoSpec> echoes(swarm, 4);
 
@@ -248,7 +249,68 @@ int main() {
                     "  pin down. A bank only resolves what it spans.\n");
     }
 
-    // ---- 6. The claim this library will not make ---------------------------
+    // ---- 6. The multipath the ocean itself imposes -------------------------
+    // Everything above placed ghosts at chosen delays. The ray tracer says what
+    // a single reflector at that range ACTUALLY returns: several arrivals, at
+    // times and levels neither of us picked.
+    static std::array<RayPoint, 8192> ray_scratch{};
+    static std::array<Eigenray, 24> paths{};
+    TraceConfig trace_cfg;
+    trace_cfg.max_range_m = 20000;
+    trace_cfg.max_time_s = 60;
+    trace_cfg.bottom_depth_m = 300;
+
+    EigenraySearch es;
+    es.angle_min_rad = deg2rad(static_cast<Real>(-10));
+    es.angle_max_rad = deg2rad(static_cast<Real>(10));
+    es.fan_count = 1201;
+
+    const Real sonar_range_m = 2500;
+    const std::size_t np = find_eigenrays(g_profile.view(), vehicle_depth_m,
+                                          static_cast<Real>(40), sonar_range_m,
+                                          trace_cfg, es, ray_scratch, paths);
+
+    std::printf("\nMultipath from the ray tracer\n");
+    std::printf("  sonar at 40 m, this vehicle at %.0f m, %.1f km apart\n",
+                static_cast<double>(vehicle_depth_m),
+                static_cast<double>(sonar_range_m) / 1000.0);
+    std::printf("  %zu eigenrays found\n", np);
+    std::printf("  %10s %10s %8s %8s %10s\n", "launch", "t (ms)", "srf", "btm", "TL (dB)");
+    for (std::size_t i = 0; i < np; ++i) {
+        std::printf("  %9.3f%s %10.3f %8u %8u %10.2f%s\n",
+                    static_cast<double>(rad2deg(paths[i].launch_angle_rad)), "d",
+                    static_cast<double>(paths[i].travel_time_s) * 1e3,
+                    paths[i].surface_bounces, paths[i].bottom_bounces,
+                    static_cast<double>(transmission_loss_db(paths[i], sonar_range_m,
+                                                             ping.centre_freq_hz, c)),
+                    paths[i].near_caustic ? "  [caustic]" : "");
+    }
+
+    if (np > 0) {
+        static std::array<EchoSpec, 24> mp{};
+        const std::size_t nm = echoes_from_eigenrays(
+            std::span<const Eigenray>(paths.data(), np), sonar_range_m,
+            ping.centre_freq_hz, c, static_cast<Real>(-6), mp);
+        double spread_ms = 0;
+        for (std::size_t i = 0; i < nm; ++i) {
+            spread_ms = std::max(spread_ms, static_cast<double>(mp[i].extra_delay_s) * 1e3);
+        }
+        std::printf("  -> %zu echoes spanning %.2f ms two-way\n", nm, spread_ms);
+        std::printf("     The transmitted pulse is %.1f ms long, so these paths %s.\n",
+                    static_cast<double>(ping.duration_s) * 1e3,
+                    (spread_ms > static_cast<double>(ping.duration_s) * 1e3)
+                        ? "resolve as separate arrivals"
+                        : "smear one arrival rather than resolving");
+        std::printf("     Absorption at %.0f kHz costs %.2f dB/km, so the longest path\n"
+                    "     pays %.1f dB more than the shortest on distance alone.\n",
+                    static_cast<double>(ping.centre_freq_hz) / 1000.0,
+                    static_cast<double>(thorp_absorption_db_per_km(ping.centre_freq_hz)),
+                    static_cast<double>(thorp_absorption_db_per_km(ping.centre_freq_hz))
+                        * static_cast<double>(paths[np - 1].path_length_m
+                                              - paths[0].path_length_m) / 1000.0);
+    }
+
+    // ---- 7. The claim this library will not make ---------------------------
     const Real fc = ping.centre_freq_hz;
     const Real tau20 = max_timing_error_s(static_cast<Real>(-20), fc);
     const Real tau10 = max_timing_error_s(static_cast<Real>(-10), fc);

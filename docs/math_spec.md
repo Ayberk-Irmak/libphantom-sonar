@@ -548,3 +548,121 @@ processing latency, orders of magnitude above 1.3 µs.
 **Conclusion.** Generating false targets is the achievable countermeasure.
 Cancelling the real one is not, and the library says so with numbers rather than
 implementing something that would not work.
+
+---
+
+## 10. Eigenrays and transmission loss
+
+### 10.1 The search
+
+An eigenray is a launch angle whose ray reaches a given receiver. Because the
+tracer honours a range budget exactly (§2.5), setting that budget to the
+receiver range makes the ray's final point *the arrival* — there is no
+interpolation and none of the chord-versus-arc error that resampling a polyline
+would introduce. What remains is a root find on
+
+```
+f(theta_0) = z_final(theta_0) - z_receiver
+```
+
+A fan brackets the sign changes; bisection polishes each one. Two eigenrays
+closer in launch angle than one fan step are seen as one, so the fan resolution
+decides completeness, not accuracy.
+
+**A root that cannot be polished to inside `depth_tolerance_m` is discarded.**
+That makes the tolerance a completeness knob rather than an accuracy one: set
+tighter than the build can achieve and paths vanish silently. Measured on a
+200 m duct at 3 km with 14 paths present:
+
+| tolerance | double | float |
+|---|---|---|
+| 0.001 m | 14 | 0 |
+| 0.010 m | 14 | 3 |
+| 0.100 m | 14 | 14 |
+
+### 10.2 Arc length
+
+Absorption is quoted per unit *path*, not per unit range, so the tracer
+accumulates arc length exactly alongside range and time. On a constant-gradient
+segment the ray is a circular arc of radius `R = 1/(xi|g|)`, so
+
+```
+ds = R |dtheta| = |theta_1 - theta_2| / (xi |g|)
+```
+
+and on an isovelocity segment `ds = |dz| / |sin theta|`. No approximation.
+
+### 10.3 Geometric spreading from the ray tube
+
+Conserve power in the tube between rays launched at `theta_0` and
+`theta_0 + dtheta_0`. A point source radiates
+
+```
+P cos(theta_0) dtheta_0 / 2
+```
+
+into that element. At range `r` the tube crosses an annulus of circumference
+`2 pi r`, and its cross-section perpendicular to the ray is `dz cos(theta_rcv)`
+— the cosine matters, and leaving it out costs `10 log10(cos theta)`. So
+
+```
+I = P cos(theta_0) / (4 pi r cos(theta_rcv) |dz/dtheta_0|)
+```
+
+and relative to the 1 m reference `I_1m = P/(4 pi)`,
+
+```
+TL = -10 log10[ c_rcv cos(theta_0) / (c_src * r * cos(theta_rcv) * |dz/dtheta_0|) ]
+```
+
+**Check.** In isovelocity water a ray is a straight line, so
+`dz/dtheta_0 = r/cos^2(theta_0)` and `theta_rcv = theta_0`, giving
+
+```
+TL = -10 log10( cos^2(theta_0) / r^2 ) = 20 log10( r / cos theta_0 ) = 20 log10 R
+```
+
+exactly spherical spreading. The test suite reproduces this to **0.0000 dB**
+across nine geometries from 1 to 20 km, with the Jacobian obtained by finite
+difference through the tracer — so the agreement exercises the whole chain, not
+just the formula.
+
+### 10.4 Caustics
+
+Where neighbouring rays cross, `dz/dtheta_0 -> 0` and the formula predicts
+infinite intensity. That is a **failure of ray theory**, not a property of the
+ocean: the correct treatment needs a wave solution through the caustic. The
+library flags such paths and refuses to report a level for them, rather than
+returning a number that looks like an answer.
+
+### 10.5 Absorption — Thorp (1967)
+
+```
+a(f) = 0.11 f^2/(1 + f^2) + 44 f^2/(4100 + f^2) + 2.75e-4 f^2 + 0.003    [dB/km, f in kHz]
+```
+
+Boric acid relaxation, magnesium sulphate relaxation, pure-water viscosity, and
+a low-frequency floor. A fit at about 4 °C with no temperature or depth
+dependence — good to roughly 10%.
+
+| f | a (dB/km) | over 3 km |
+|---|---|---|
+| 1 kHz | 0.069 | 0.21 dB |
+| 10 kHz | 1.19 | 3.6 dB |
+| 100 kHz | 34.1 | 102 dB |
+
+At 100 kHz absorption over 3 km exceeds the spreading loss by 30 dB. That single
+comparison is why long-range sonar is low-frequency, and why a tank experiment
+at 200 kHz can ignore absorption entirely over a metre.
+
+### 10.6 Multipath echoes
+
+For a monostatic geometry the echo returns along the path the ping arrived on,
+so each eigenray contributes one arrival at `2t_i` with two-way loss
+`2 TL_i`. Delays are referenced to the earliest path, levels to the strongest.
+
+The scale that matters operationally is the multipath spread against the pulse
+length: comparable and the paths smear one echo, much larger and they resolve as
+separate targets. A 300 m duct at 2.5 km with a ±10° fan spreads arrivals over
+70 ms, which a 20 ms pulse resolves; the same geometry with a ±25° fan spreads
+them over 400 ms.

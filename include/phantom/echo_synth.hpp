@@ -23,6 +23,7 @@
 #ifndef PHANTOM_ECHO_SYNTH_HPP
 #define PHANTOM_ECHO_SYNTH_HPP
 
+#include "phantom/eigenray.hpp"
 #include "phantom/ping_analyzer.hpp"
 #include "phantom/types.hpp"
 #include "phantom/waveform.hpp"
@@ -36,6 +37,11 @@ struct EchoSpec {
     // Apparent range offset from the true reflector, in metres. Positive puts
     // the ghost further away. Converted to delay as 2*dr/c.
     Real range_offset_m = 0;
+    // Delay added directly, on top of the range offset. This is the multipath
+    // route: a traced path's arrival time is a time, not a range, and forcing
+    // it through 2*dr/c would assume a straight line at a nominal sound speed
+    // -- exactly the assumption the ray tracer exists to remove.
+    Real extra_delay_s = 0;
     // Echo level relative to the intercepted ping, in dB. Negative is quieter.
     Real target_strength_db = 0;
     // Radial velocity to impose, m/s, positive closing.
@@ -81,6 +87,26 @@ std::size_t synthesize_swarm(const PulseDescriptor& pdw,
                              Real sample_rate_hz,
                              Real sound_speed_mps,
                              std::span<Real> out) noexcept;
+
+// Builds one echo per eigenray, so the arrival structure comes from the traced
+// paths rather than from hand-picked delays.
+//
+// Delays are referenced to the FIRST path, so the swarm starts at zero and the
+// caller places it wherever the reply is transmitted. Levels are the two-way
+// transmission loss (out along the path and back along the same one) relative
+// to the strongest path, plus `target_strength_db`.
+//
+// This is a same-path round trip: a monostatic geometry where the echo returns
+// the way the ping came. A bistatic case needs two path sets and is not what
+// this does.
+//
+// Returns the number of echoes written.
+std::size_t echoes_from_eigenrays(std::span<const Eigenray> paths,
+                                  Real range_m,
+                                  Real frequency_hz,
+                                  Real source_speed_mps,
+                                  Real target_strength_db,
+                                  std::span<EchoSpec> out) noexcept;
 
 // Samples `synthesize_swarm` needs for this PDW and echo set.
 [[nodiscard]] std::size_t swarm_length(const PulseDescriptor& pdw,

@@ -59,6 +59,11 @@ struct TraceResult {
     std::uint32_t steps           = 0;  // arc segments integrated
     Real          final_range_m   = 0;
     Real          final_time_s    = 0;
+    // Arc length travelled, exact: each constant-gradient segment contributes
+    // R*|dtheta| with R = 1/(xi|g|), and each isovelocity segment |dz/sin|.
+    // Needed for absorption, which is quoted per unit path length rather than
+    // per unit range.
+    Real          path_length_m   = 0;
     Real          snell_invariant = 0;  // xi = cos(theta)/c, constant by construction
     TraceStatus   status          = TraceStatus::Degenerate;
 };

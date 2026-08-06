@@ -399,10 +399,15 @@ PT_TEST(echo_ghost_swarm_places_every_target) {
     PT_CHECK(analyze_block(v, cfg, g_block, 0, g_scratch.view(), pdw) >= 1);
     const PulseDescriptor ping = pdw[0];
 
+    // Designated initialisers on purpose. EchoSpec gained `extra_delay_s` as its
+    // second member in v0.4, and every positional initialiser silently became a
+    // different echo -- a -8 dB target strength was read as a -8 SECOND delay,
+    // and the ghost was dropped for arriving before the ping. Naming the fields
+    // makes the next insertion a no-op instead of a puzzle.
     const EchoSpec swarm[] = {
-        {static_cast<Real>(10), static_cast<Real>(0),  0, 1},
-        {static_cast<Real>(25), static_cast<Real>(-4), 0, 1},
-        {static_cast<Real>(45), static_cast<Real>(-8), 0, 1},
+        {.range_offset_m = 10, .target_strength_db = 0},
+        {.range_offset_m = 25, .target_strength_db = -4},
+        {.range_offset_m = 45, .target_strength_db = -8},
     };
     const std::span<const EchoSpec> echoes(swarm, 3);
 
