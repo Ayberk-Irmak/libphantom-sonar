@@ -1,0 +1,148 @@
+# SPDX-License-Identifier: Apache-2.0
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    name: ${{ matrix.os }} / ${{ matrix.compiler }} / ${{ matrix.real }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        compiler: [default]
+        real: [double]
+        include:
+          # Precision matters here: the same algorithm at float precision loses
+          # ~9 digits, so it gets its own job rather than being assumed to work.
+          - os: ubuntu-latest
+            compiler: gcc
+            real: float
+          - os: ubuntu-latest
+            compiler: clang
+            real: double
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select compiler
+        if: runner.os == 'Linux'
+        run: |
+          if [ "${{ matrix.compiler }}" = "clang" ]; then
+            echo "CC=clang"   >> "$GITHUB_ENV"
+            echo "CXX=clang++" >> "$GITHUB_ENV"
+          elif [ "${{ matrix.compiler }}" = "gcc" ]; then
+            echo "CC=gcc"   >> "$GITHUB_ENV"
+            echo "CXX=g++"  >> "$GITHUB_ENV"
+          fi
+
+      - name: Configure
+        run: >
+          cmake -S . -B build
+          -DCMAKE_BUILD_TYPE=Release
+          -DPHANTOM_WERROR=ON
+          -DPHANTOM_REAL_FLOAT=${{ matrix.real == 'float' && 'ON' || 'OFF' }}
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Test
+        run: ctest --test-dir build --build-config Release --output-on-failure
+
+      - name: Benchmark (informational)
+        if: matrix.real == 'double'
+        run: |
+          if [ -f build/phantom_bench ]; then
+            ./build/phantom_bench
+          elif [ -f build/Release/phantom_bench.exe ]; then
+            ./build/Release/phantom_bench.exe
+          fi
+        shell: bash
+
+  sanitizers:
+    name: ASan + UBSan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: >
+          cmake -S . -B build
+          -DCMAKE_BUILD_TYPE=Debug
+          -DPHANTOM_SANITIZE=ON
+          -DPHANTOM_WERROR=ON
+      - name: Build
+        run: cmake --build build --parallel
+      - name: Test
+        env:
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+          ASAN_OPTIONS: detect_leaks=1
+        run: ./build/phantom_tests
+
+  no-allocation:
+    name: Zero-allocation audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Source audit
+        run: python3 tools/audit_no_alloc.py
+
+      - name: Link audit
+        # The definitive check: nothing in the library object code may reference
+        # an allocation symbol. Greps can be fooled by clever code; nm cannot.
+        run: |
+          set -e
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+                -DPHANTOM_BUILD_TESTS=OFF -DPHANTOM_BUILD_EXAMPLES=OFF \
+                -DPHANTOM_BUILD_BENCH=OFF
+          cmake --build build --parallel
+          echo "--- undefined symbols referenced by libphantom-sonar.a ---"
+          nm -uC build/libphantom-sonar.a || true
+          if nm -uC build/libphantom-sonar.a \
+               | grep -E 'operator new|operator delete|\bmalloc\b|\bcalloc\b|\brealloc\b|\bfree\b'; then
+            echo "::error::library object code references an allocator"
+            exit 1
+          fi
+          echo "clean: no allocator symbols referenced"
+
+  static-analysis:
+    name: cppcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install cppcheck
+        run: sudo apt-get update && sudo apt-get install -y cppcheck
+      - name: Run cppcheck
+        run: >
+          cppcheck --enable=warning,style,performance,portability
+          --std=c++20 --error-exitcode=1 --inline-suppr --quiet
+          --suppress=missingIncludeSystem
+          -I include/ src/
+
+  example-runs:
+    name: Example produces the expected channel analysis
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --parallel
+      - name: Run and check the SOFAR numbers
+        run: |
+          mkdir -p out
+          ./build/munk_simulation out | tee report.txt
+          # The Munk axis is at 1300 m with a +/- 14.38 deg trapping cone.
+          # If either moves, something in the physics changed.
+          grep -q "axis depth         : 1300.0 m" report.txt
+          grep -q "trapping cone      : +/- 14.38" report.txt
+          test -s out/rays.csv
+          test -s out/coverage.csv
+      - uses: actions/upload-artifact@v4
+        with:
+          name: simulation-output
+          path: out/

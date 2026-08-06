@@ -1,0 +1,20 @@
+build/
+build-*/
+out/
+*.o
+*.a
+*.so
+*.so.*
+*.dylib
+*.exe
+compile_commands.json
+.cache/
+.vscode/
+.idea/
+
+# Simulation output. The README figure is committed on purpose; the multi-MB
+# CSV it is generated from is not.
+data/*.csv
+!data/README.md
+__pycache__/
+*.pyc
