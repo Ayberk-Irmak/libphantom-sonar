@@ -21,7 +21,7 @@ first.
   to 0.14 mm over 101 km at Bellhop's finest step, with the residual shown to be
   the comparison's own sampling error rather than a difference between the codes
 
-## v0.2 — Ping analysis ✅ *(current)*
+## v0.2 — Ping analysis ✅
 
 The original specification jumped straight to echo synthesis, but **an echo
 synthesiser with no input is not a module.** Detecting and characterising the
@@ -35,7 +35,36 @@ incoming ping is the harder half, so it shipped first.
 - 100/100 waveform classification at -4.4 dB input SNR
 - 29x real time on one core; 65 ms detection latency, set by the block length
 
-## v0.3 — Real data and eigenrays
+## v0.3 — Doppler bank and echo synthesis ✅ *(current)*
+
+- Doppler bin spacing derived per waveform family and checked against the
+  measured loss; over +/- 20 m/s at 1 dB it takes 14 bins for a CW, 5 for an
+  LFM and 2 for an HFM
+- `PulseBank::add_doppler_bank()`, radial velocity in the PDW
+- `EchoSynthesizer`: two-way delay and Doppler, target strength, extended
+  targets, ghost swarms -- all verified by closed loop through the analyser
+- Anti-phase cancellation quantified rather than implemented: 20 dB needs the
+  timing held to 1.3 us, under two millimetres of path
+- Cross-check between halves: a Doppler bin error of 4 m/s produces exactly the
+  arrival-time bias the wideband coupling formula predicts
+
+## v0.4 — Ray-acoustics coupling
+
+The two halves of the library still meet only through the sound speed. Closing
+that gap is what makes the echoes physical rather than parameterised.
+
+- [ ] Eigenray search -- launch angles connecting a source to a receiver.
+- [ ] Transmission loss along traced paths: spherical/cylindrical spreading plus
+      Thorp absorption, so target strength numbers mean something absolute.
+- [ ] Multipath echo synthesis: one ping, several arrivals, delays and levels
+      taken from the ray tracer instead of specified by hand.
+- [ ] Cross-template ghost suppression: association logic across detections.
+- [ ] Ray-tube area and caustic handling, which is what a physically defensible
+      shadow zone actually requires.
+- [ ] Bearing estimation, which needs an array rather than the single channel
+      assumed so far.
+
+## v0.5 — Real data
 
 - [x] **Bellhop cross-validation.** Done in v0.1.1. Both codes read the same
       `.env`; Bellhop converges toward the analytic arc solution as its step
@@ -44,33 +73,9 @@ incoming ping is the harder half, so it shipped first.
       with the official values rather than mutual agreement between equations.
 - [ ] **Real T/S profiles.** World Ocean Atlas (WOA23) and Argo float ingest;
       ship two or three real regional profiles in `data/` with provenance.
-- [ ] Eigenray search — launch angles that connect a source to a given receiver.
-      Needed by echo synthesis.
 - [ ] Range-dependent bathymetry (piecewise-linear bottom).
 
-## v0.4 — Echo synthesis
-
-- [ ] Doppler bank — replicate templates across Doppler bins so a fast target is
-      matched rather than merely detected, and the range-Doppler bias (measured
-      in v0.2, `docs/math_spec.md §6.2`) can actually be corrected.
-- [ ] Cross-template ghost suppression: association logic across detections.
-- [ ] Transmission loss along traced paths: spherical/cylindrical spreading plus
-      Thorp absorption, so target strength numbers mean something.
-- [ ] `EchoSynthesizer` — delay/Doppler/target-strength shaped echo generation,
-      `Δt = 2Δd/c`; multi-target pulse trains.
-- [ ] Ray-tube area and caustic handling, which is what a physically defensible
-      shadow zone actually requires.
-- [ ] Bearing estimation, which needs an array rather than the single channel
-      v0.2 assumes.
-
-**Honest scope note.** Anti-phase cancellation of a vehicle's acoustic cross
-section is *not* achievable in practice with a point transducer against a
-broadband ping across all bearings — hull scattering is distributed and
-broadband. What can be simulated is narrowband, single-bearing nulling, and that
-is what will be implemented, documented with its limits. Overclaiming here is
-how a project loses the audience it is trying to reach.
-
-## v0.5 — Covert acoustic communication
+## v0.6 — Covert acoustic communication
 
 - [ ] DSSS modulator/demodulator with configurable chip rate and explicit
       processing gain `10·log10(N)`
@@ -83,14 +88,14 @@ how a project loses the audience it is trying to reach.
 - [ ] Bio-mimetic waveform shaping (spectral masking against ambient noise and
       biological transients)
 
-## v0.6 — Bindings and portability
+## v0.7 — Bindings and portability
 
 - [ ] Stable C ABI (`phantom.h`, hand-written, no generator)
 - [ ] Rust `phantom-sonar-sys` + safe wrapper crate
 - [ ] Cortex-M7 / RISC-V cross-compilation in CI with size and WCET reporting
 - [ ] `-fno-exceptions -fno-rtti` build mode
 
-## v0.7 — Hardware in the loop
+## v0.8 — Hardware in the loop
 
 See `docs/hardware.md` for the bench design and the bill of materials. Bench and
 tank only — a real acoustic transmitter in open water is a regulatory and

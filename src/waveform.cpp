@@ -203,4 +203,55 @@ std::size_t render_real_doppler(const PulseSpec& spec, Real sample_rate_hz,
     return n;
 }
 
+std::size_t render_analytic_doppler(const PulseSpec& spec, Real sample_rate_hz,
+                                    Real doppler, std::span<Complex> out) noexcept {
+    if (!spec.valid() || !(sample_rate_hz > kZero)) return 0;
+    const Real scale = kOne + doppler;
+    if (!(scale > kZero)) return 0;
+
+    const Real rx_duration = spec.duration_s / scale;
+    const Real n_real = rx_duration * sample_rate_hz;
+    if (!(n_real >= kOne)) return 0;
+    const auto n = static_cast<std::size_t>(n_real);
+    if (out.size() < n) return 0;
+
+    const Real dt = kOne / sample_rate_hz;
+    for (std::size_t i = 0; i < n; ++i) {
+        const Real t_src = scale * static_cast<Real>(i) * dt;
+        const Real a = spec.amplitude * taper_weight(spec.taper, t_src, spec.duration_s);
+        const Real ph = pulse_phase(spec, t_src);
+        out[i] = Complex(a * std::cos(ph), a * std::sin(ph));
+    }
+    return n;
+}
+
+Real doppler_tolerance(const PulseSpec& spec, Real max_loss_db) noexcept {
+    if (!spec.valid() || !(max_loss_db > kZero)) return kZero;
+    const Real amp = std::pow(static_cast<Real>(10), -max_loss_db / static_cast<Real>(20));
+
+    switch (spec.type) {
+        case PulseType::Cw: {
+            // sinc(x) ~ 1 - (pi x)^2 / 6  with x = delta * f0 * T
+            const Real x = std::sqrt(static_cast<Real>(6) * (kOne - amp)) / kPi;
+            const Real ft = spec.f_start_hz * spec.duration_s;
+            return (ft > kZero) ? x / ft : kZero;
+        }
+        case PulseType::LfmUp:
+        case PulseType::LfmDown: {
+            const Real tb = spec.time_bandwidth_product();
+            if (!(tb > kZero)) return kZero;
+            // sigma = 2 pi TB delta / sqrt(180),  loss_dB = 4.343 sigma^2
+            const Real sigma = std::sqrt(max_loss_db / static_cast<Real>(4.34294));
+            return sigma * std::sqrt(static_cast<Real>(180))
+                 / (static_cast<Real>(2) * kPi * tb);
+        }
+        case PulseType::Hfm:
+            // Duration mismatch only: amplitude ~ (1 - |delta|).
+            return kOne - amp;
+        case PulseType::Unknown:
+            break;
+    }
+    return kZero;
+}
+
 }  // namespace phantom

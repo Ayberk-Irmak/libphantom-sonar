@@ -2,7 +2,7 @@
 cmake_minimum_required(VERSION 3.20)
 
 project(phantom-sonar
-        VERSION 0.2.0
+        VERSION 0.3.0
         DESCRIPTION "Real-time ocean acoustics, ray tracing and sonar pulse analysis"
         LANGUAGES CXX)
 
@@ -56,7 +56,8 @@ add_library(phantom_sonar
     src/fft.cpp
     src/waveform.cpp
     src/matched_filter.cpp
-    src/ping_analyzer.cpp)
+    src/ping_analyzer.cpp
+    src/echo_synth.cpp)
 add_library(phantom::sonar ALIAS phantom_sonar)
 
 target_include_directories(phantom_sonar
@@ -94,7 +95,8 @@ if(PHANTOM_BUILD_TESTS)
         tests/test_fft.cpp
         tests/test_waveform.cpp
         tests/test_matched_filter.cpp
-        tests/test_ping_analyzer.cpp)
+        tests/test_ping_analyzer.cpp
+        tests/test_echo_synth.cpp)
     target_link_libraries(phantom_tests PRIVATE phantom_sonar)
     target_include_directories(phantom_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
     target_compile_options(phantom_tests PRIVATE ${PHANTOM_WARNINGS})
@@ -118,6 +120,10 @@ if(PHANTOM_BUILD_EXAMPLES)
     add_executable(ping_intercept examples/ping_intercept.cpp)
     target_link_libraries(ping_intercept PRIVATE phantom_sonar)
     target_compile_options(ping_intercept PRIVATE ${PHANTOM_WARNINGS})
+
+    add_executable(countermeasure_loop examples/countermeasure_loop.cpp)
+    target_link_libraries(countermeasure_loop PRIVATE phantom_sonar)
+    target_compile_options(countermeasure_loop PRIVATE ${PHANTOM_WARNINGS})
 endif()
 
 if(PHANTOM_BUILD_BENCH)

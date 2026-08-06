@@ -5,7 +5,7 @@ Zero dependencies, zero heap allocation, C++20.
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 ![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)
-![Status](https://img.shields.io/badge/status-v0.2%20ray%20tracing%20%2B%20ping%20analysis-orange.svg)
+![Status](https://img.shields.io/badge/status-v0.3%20tracing%20%2B%20analysis%20%2B%20echo-orange.svg)
 ![Validated](https://img.shields.io/badge/validated-vs%20Bellhop-brightgreen.svg)
 
 ![Munk deep sound channel propagation](data/munk_rays.png)
@@ -139,6 +139,69 @@ Verified on upsweeps, downsweeps and narrow sweeps — the narrowband formula is
 off by 13 samples on the 8-16 kHz case where the wideband form agrees within 3.
 Derivation in [`docs/math_spec.md §6.2`](docs/math_spec.md).
 
+**Doppler is where underwater differs from radar, and the bank sizing shows it.**
+A zero-Doppler template detects a moving target but does not match it. How many
+Doppler bins a bank needs is a property of the waveform — derived per family and
+checked against measurement. Over ±20 m/s at 1 dB straddling loss, for the same
+8-20 kHz 20 ms sweep:
+
+| waveform | bins needed |
+|---|---|
+| CW | 14 |
+| LFM | 5 |
+| **HFM** | **2** |
+
+Each bin is another correlation per block and another 128 kB of replica
+spectrum, so that ratio is the design argument for hyperbolic sweeps stated as a
+cost.
+
+**Echo synthesis, verified by closed loop.** A ping is detected, an echo is
+synthesised from the resulting descriptor, and the echo is fed back through the
+analyser. A shared sign error between the two halves then shows up as a round
+trip that does not close, instead of as two tests that agree and are both wrong.
+
+```
+Reply
+   range (m)    TS (dB)    v (m/s) delay (ms)
+           8         -2          3      10.62
+          20         -5          0      26.55
+          32         -8         -4      42.48
+          44        -11          6      58.40
+
+As received back
+      ToA (ms) type            amp    SNR dB    v (m/s)
+        12.659 LFM-up        0.525      21.0        4.0   <- ghost at 8 m
+        44.472 LFM-up        0.258      17.1      -12.0   <- ghost at 32 m
+        60.477 LFM-up        0.227      16.7       12.0   <- ghost at 44 m
+```
+
+Delay and Doppler are both **two-way**: `dt = 2dr/c` and
+`alpha = (c+v)/(c-v)`, the exact form rather than `1 + 2v/c` (they differ by
+0.4% at 30 m/s, which is four samples across a 20 ms pulse). The factor of two
+in each is the likeliest bug in an echo path, so the round trip asserts the
+reading is closer to the two-way scale than to the ghost's own velocity.
+
+**The two halves cross-check each other.** In the closed-loop example an 8 m/s
+ping lands in the 12 m/s bin; the 4 m/s residual produces an arrival-time error
+of **+0.0885 ms**, and the wideband coupling formula predicts
+`dt = -(v/c)·f_end/mu = +0.0885 ms`. Two results derived independently, agreeing
+to four decimals.
+
+**On cancelling the echo rather than faking it.** Every countermeasure
+specification asks for anti-phase cancellation. This library quantifies it
+instead of implementing it:
+
+| cancellation | timing budget | path budget at 1500 m/s |
+|---|---|---|
+| −10 dB | 4.2 µs | 6.3 mm |
+| −20 dB | 1.3 µs | **2.0 mm** |
+
+Bandwidth barely matters (widening a 12 kHz-centred band from 0 to 12 kHz costs
+0.3 dB); timing is everything. Past a quarter period the canceller *adds* up to
+6 dB. Add distributed hull scattering — one projector cannot match phase at more
+than one bearing — and the conclusion is that **generating false targets is the
+achievable countermeasure; cancelling the real one is not.**
+
 **Verified against closed forms, not against baselines.** A recorded baseline
 tells you the code did not change. These tell you it is right:
 
@@ -154,7 +217,7 @@ tells you the code did not change. These tell you it is right:
 | Matched filter peak, width, coherent gain | `A·E/2`, `1/B`, `L/2` — all matched |
 | Waveform classification, 4 types at −4.4 dB SNR | 100/100 |
 
-6106 checks. Clean under GCC 15 and Clang 21 with `-Wconversion -Wsign-conversion
+6226 checks. Clean under GCC 15 and Clang 21 with `-Wconversion -Wsign-conversion
 -Wold-style-cast -Wdouble-promotion -Werror`, and under ASan + UBSan. Passes in
 both `double` and `float` builds. Zero allocation is proven by `nm` over the
 built archive, not asserted: the library references only libm and `memset`.
@@ -195,6 +258,7 @@ cmake --build build
 ./build/phantom_bench          # the table above
 ./build/munk_simulation data   # CSV + channel analysis
 ./build/ping_intercept data    # streaming ping detection, scored against truth
+./build/countermeasure_loop    # intercept -> classify -> reply, scored
 python3 tools/plot_rays.py data
 
 # cross-validate against Bellhop (downloads and builds the Acoustics Toolbox)
@@ -262,8 +326,16 @@ Stated plainly, because the gaps matter more than the features:
   arrival more than once — an LFM arrival lights the HFM template ~10.5 dB down
   at a shifted lag. Correct behaviour for a matched filter bank; suppressing it
   needs association logic, which is v0.4.
-- **Zero-Doppler templates and no bearing.** A fast target degrades the match
-  rather than being matched, and bearing needs an array.
+- **A bank only resolves what it spans.** An echo stretched to 28 ms is detected
+  by a 20 ms template and mis-reported in both time and type — shown
+  deliberately in `countermeasure_loop`.
+- **Doppler is quantised and the range bias is measured, not corrected.**
+- **No bearing.** Single channel; bearing needs an array.
+- **Echo levels are specified, not computed.** Target strength is a dB figure,
+  not the output of a scattering model, and there is no transmission loss along
+  the traced path yet. That coupling is v0.4.
+- **A Doppler bank is megabytes** — 8 MB at 64 templates and an 8192-point
+  transform — and must not go on the stack.
 - **The Bellhop comparison covers geometry, not amplitude**, and only
   range-independent profiles — because that is all the library models. It is not
   evidence about transmission loss or range-dependent propagation.

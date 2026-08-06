@@ -140,6 +140,15 @@ std::size_t analyze_block(const AnalyzerView& bank,
         for (std::size_t j = i; j < window_end; ++j) {
             if (work.best_power[j] > work.best_power[peak]) peak = j;
         }
+        // If the window's maximum sits on its trailing edge, the real peak is
+        // outside it: climb until the response actually turns over. Without
+        // this the reported cell is wherever the window happened to end, which
+        // is a function of where the first cell crossed threshold rather than
+        // of the signal -- a one-sample bias in the good case and a wholly
+        // wrong arrival in the bad one.
+        while (peak + 1 < lags && work.best_power[peak + 1] > work.best_power[peak]) {
+            ++peak;
+        }
 
         const std::uint16_t t = work.best_template[peak];
         const PulseTemplate& tpl = bank.templates[t];
@@ -174,6 +183,8 @@ std::size_t analyze_block(const AnalyzerView& bank,
         pdw.bandwidth_hz = tpl.spec.bandwidth_hz();
         pdw.duration_s = tpl.spec.duration_s;
         pdw.chirp_rate_hz_s = tpl.spec.chirp_rate_hz_s();
+        pdw.radial_velocity_mps = tpl.doppler * bank.sound_speed_mps;
+        pdw.doppler_resolved = tpl.doppler_bin;
         pdw.template_index = t;
 
         i = peak + dead_samples;

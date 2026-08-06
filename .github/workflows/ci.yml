@@ -194,6 +194,15 @@ jobs:
           # 5 pings present; a regression in the detector shows up here first.
           grep -q "correctly detected   : 5" intercept.txt
 
+      - name: Run the countermeasure loop
+        run: |
+          ./build/countermeasure_loop | tee loop.txt
+          # The two halves must keep agreeing: a Doppler bin error of +4.0 m/s
+          # has to produce exactly the arrival bias the coupling formula gives.
+          grep -q "error +0.0885" loop.txt
+          grep -q "dt = -(v/c) f_end/mu = +0.0885 ms" loop.txt
+          grep -q "ghosts resolved    : 3" loop.txt
+
       - uses: actions/upload-artifact@v4
         with:
           name: simulation-output

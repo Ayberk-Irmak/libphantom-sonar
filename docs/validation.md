@@ -239,14 +239,85 @@ response:
 Three of four waveforms still working is exactly what makes this bug hide.
 `analyzer_cfar_guard_must_clear_the_response` pins both halves.
 
-## 5. Build and runtime hygiene ✅
+## 5. Doppler bank and echo synthesis — verified ✅
+
+### Doppler bin spacing against measurement
+
+The spacing formula is only useful if it predicts the real loss. Checked
+directly against the matched filter: at the `|delta|` the formula reports, the
+peak must actually have dropped by about that much.
+
+| waveform | requested | δ | v (m/s) | measured loss |
+|---|---|---|---|---|
+| LFM | 1 dB | 4.27e-3 | 6.4 | 1.08 dB |
+| LFM | 3 dB | 7.39e-3 | 11.1 | 3.15 dB |
+| HFM | 1 dB | 0.109 | 163 | 1.55 dB |
+| HFM | 3 dB | 0.292 | 438 | 4.12 dB |
+
+Bins needed over ±20 m/s at 1 dB straddling loss, same 8-20 kHz 20 ms sweep:
+**CW 14, LFM 5, HFM 2.** That ratio is the design argument for hyperbolic
+sweeps, in a number.
+
+### Velocity estimation
+
+A bank over ±12 m/s (3 bins, 12 m/s spacing) recovers radial velocity to within
+5.0 m/s, against a half-bin floor of 6.0 m/s — i.e. the estimator is
+quantisation-limited, as it should be. The bank also recovers most of the peak a
+zero-Doppler template loses: at 10 m/s, −2.54 dB becomes −0.18 dB.
+
+### Echo synthesis — closed loop
+
+Every echo test detects a ping, synthesises an echo from the resulting
+descriptor, and feeds it back through the analyser. A shared sign error between
+the two halves shows up as a round trip that does not close, rather than as two
+tests that agree with each other and are both wrong.
+
+| Quantity | Result |
+|---|---|
+| Delay, 20 m and 45 m apparent range | 26.656 / 59.990 ms vs 26.667 / 60.000 |
+| Target strength, 0 and −6 dB | amplitude 1.000 and 0.501 |
+| Two-way Doppler, ghost at 5 m/s | bank reads 10.0 m/s (two-way scale = 10.03) |
+| Ghost swarm, 3 targets at 0/−4/−8 dB | all placed exactly; amplitudes 1.000 / 0.631 / 0.398 |
+| Extended target, `length_scale` 2 | 1920 → 3840 samples |
+
+The Doppler round trip asserts the reading is closer to the **two-way** scale
+than to the ghost's own velocity — the factor of two is the likeliest bug in the
+whole echo path, so it is tested for directly.
+
+### Cross-check between the two halves
+
+In `countermeasure_loop`, an 8 m/s ping lands in the 12 m/s bin, and the
+resulting 4 m/s residual produces an arrival-time error of **+0.0885 ms**. The
+wideband coupling of §4 predicts `dt = -(v/c)·f_end/mu = +0.0885 ms` — the
+Doppler bank and the range-Doppler formula, derived independently, agree to four
+decimal places.
+
+### Anti-phase cancellation: measured, not claimed
+
+| cancellation | timing budget | path budget |
+|---|---|---|
+| −6 dB | 6.72 µs | 10.08 mm |
+| −10 dB | 4.21 µs | 6.32 mm |
+| −20 dB | 1.33 µs | **1.99 mm** |
+| −30 dB | 0.42 µs | 0.63 mm |
+
+Bandwidth is nearly irrelevant: with a 2 µs error at 12 kHz, widening the band
+from 0 to 12 kHz moves the residual by 0.34 dB. The limit is timing. Past a
+quarter period the canceller **adds** up to 6 dB.
+
+Not modelled, and both make it worse: distributed hull scattering (one projector
+cannot match phase at more than one bearing) and the latency floor (a canceller
+cannot invert a sample it has not received). **Generating false targets is the
+achievable countermeasure; cancelling the real one is not.**
+
+## 6. Build and runtime hygiene ✅
 
 | Configuration | Result |
 |---|---|
 | GCC 15.3, `-Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion -Wold-style-cast -Wcast-qual -Wdouble-promotion -Werror` | clean |
 | Clang 21.1, same set | clean |
-| AddressSanitizer + UndefinedBehaviorSanitizer | clean, 6106 checks |
-| `Real = float` (`-DPHANTOM_REAL_FLOAT=ON`) | 6106 checks pass |
+| AddressSanitizer + UndefinedBehaviorSanitizer | clean, 6226 checks |
+| `Real = float` (`-DPHANTOM_REAL_FLOAT=ON`) | 6226 checks pass |
 | Heap allocations during execution | **zero** — proven by `nm` over the built archive: the library references only libm and `memset` |
 
 ### float vs double
@@ -264,7 +335,7 @@ layers:
 acceptable if you are differencing travel times for ranging. Use `double` unless
 your FPU forces otherwise.
 
-## 6. Performance (measured, not claimed)
+## 7. Performance (measured, not claimed)
 
 13th Gen Intel Core i7-13620H, `-O3`, single thread:
 
@@ -304,7 +375,7 @@ actually constrains a control loop, and measures **52 ns**. Re-run
 guarantee; these numbers are not a substitute for WCET analysis on the target
 silicon.
 
-## 7. Self-consistent but NOT independently verified ⚠️
+## 8. Self-consistent but NOT independently verified ⚠️
 
 - **Chen-Millero against the published UNESCO check tables.** The
   implementation is cross-validated against two independent equations (§3),
@@ -318,7 +389,7 @@ silicon.
 - **Real measured T/S profiles.** Everything so far uses analytic profiles
   (Munk, linear, isovelocity). Feeding World Ocean Atlas / Argo data is v0.2.
 
-## 8. Known limitations — not bugs, scope ⚠️
+## 9. Known limitations — not bugs, scope ⚠️
 
 - **Shadow fraction depends on ray density.** Gaps between adjacent rays read as
   shadow. Measured convergence for the 100 km Munk case on a 500×250 grid:
@@ -348,35 +419,39 @@ silicon.
   frequency-dependent.
 - **2-D (range–depth) only.** No azimuthal coupling or out-of-plane refraction.
 
-## 9. Not implemented in v0.2
+## 10. Not implemented in v0.3
 
-`EchoSynthesizer` and `BioMimeticCommEngine` are not in this release. See
-`docs/roadmap.md`.
+`BioMimeticCommEngine` is not in this release. See `docs/roadmap.md`.
 
 Known gaps within what *is* shipped:
 
-- **Cross-template ghosts.** A bank whose templates are not mutually orthogonal
-  reports a real arrival more than once: with the LFM and HFM sharing a band, an
-  LFM arrival produces an HFM response about **10.5 dB down** at a shifted lag.
-  That is the bank faithfully reporting a partial match, not a defect, but
-  suppressing it needs association logic across detections — a tracker's job,
-  and v0.3 work. Pinned by `analyzer_reports_cross_template_ghosts`.
-- **No Doppler bank.** Templates are zero-Doppler. A fast target degrades the
-  match (see §4); covering it means replicating the bank across Doppler bins.
-- **Range-Doppler bias is measured, not corrected.** The wideband formula is
-  verified but the analyser does not apply it, because doing so requires a
-  Doppler estimate the bank does not yet produce.
+- **Cross-template ghosts.** A bank whose templates share a band reports one
+  arrival more than once — LFM and HFM over the same sweep produce a ~10.5 dB
+  ghost at a shifted lag. Correct behaviour for a matched filter bank;
+  suppressing it needs association logic across detections.
+- **A bank only resolves what it spans.** An echo with `length_scale` 1.4 is a
+  28 ms pulse; a bank of 20 ms templates detects it by a mismatched replica and
+  reports both its time and its type wrongly. Demonstrated deliberately in
+  `countermeasure_loop`.
+- **Doppler is quantised, and the range bias is not corrected.** The wideband
+  coupling is verified and predicted, but the analyser does not subtract it —
+  doing so needs a Doppler estimate finer than the bin grid.
 - **No bearing estimation.** Single-channel; bearing needs an array.
+- **Memory.** A Doppler bank costs `MaxTemplates * FftSize * sizeof(Complex)`:
+  8 MB at 64 templates and an 8192-point transform. It must not go on the stack.
+- **No transmission loss or target strength modelling from geometry.** Echo
+  levels are specified in dB, not computed from a scattering model.
 
 ## Reproducing
 
 ```bash
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
-./build/phantom_tests          # 6106 checks
+./build/phantom_tests          # 6226 checks
 ./build/phantom_bench          # timing table above
 ./build/munk_simulation data   # CSV + console report
 ./build/ping_intercept data    # streaming ping detection demo
+./build/countermeasure_loop    # intercept -> classify -> reply, scored
 python3 tools/plot_rays.py data
 ```
 

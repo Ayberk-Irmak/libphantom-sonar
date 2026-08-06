@@ -422,3 +422,129 @@ bound.
   — pulse compression, CA-CFAR.
 - Kroszczynski, "Pulse compression by means of linear-period modulation",
   *Proc. IEEE* 57(7), 1969 — the HFM/Doppler-invariance result.
+
+---
+
+## 8. Doppler banks
+
+A zero-Doppler template detects a moving target but does not *match* it. A bank
+replicates each waveform across Doppler bins; how many bins that takes is a
+property of the waveform, and the three families differ by orders of magnitude.
+
+Writing `delta = v/c`, the mismatch loss at the midpoint between bins sets the
+spacing. Per family:
+
+### 8.1 CW
+
+The matched filter output against a Doppler-shifted CW is `sinc(delta f0 T)`.
+Expanding to second order, the `|delta|` giving a loss of `L` dB is
+
+```
+delta = sqrt(6 (1 - a)) / (pi f0 T),        a = 10^(-L/20)
+```
+
+### 8.2 LFM
+
+A mismatched chirp leaves a residual quadratic phase `B t²` with `B = mu delta`.
+The detector absorbs the least-squares *linear* part of that as the range bias
+of §6.2; what remains is the deviation of `t²` from its own best-fit line, whose
+RMS over `[0,T]` is `T²/sqrt(180)`. So
+
+```
+sigma_phi = 2 pi TB delta / sqrt(180)
+loss_dB   = 4.343 sigma_phi^2
+```
+
+which makes `delta_1dB` almost exactly `1/TB`.
+
+**Validity.** This is a small-mismatch expansion. At 1 dB it predicts 5.49 dB
+where 5.73 dB is measured; at 15 m/s on the same waveform it predicts 49 dB
+where 9.9 dB is measured, because the true loss saturates while the expression
+runs away. It is a bin-spacing tool, not a model of deep mismatch.
+
+### 8.3 HFM
+
+An HFM under time scaling is *exactly* a delayed HFM. Writing
+`u = k f0 t` and `v = k f0 tau`, the phase difference against the replica is
+
+```
+(2 pi / k) ln[ (1 + alpha u) / (1 + u - v) ]
+```
+
+which is constant — a pure phase offset — when `v = (alpha - 1)/alpha`. So there
+is no phase residual at all, only the duration mismatch, an amplitude factor of
+`(1 - |delta|)`.
+
+The delay that constant corresponds to is large: `tau = (alpha-1)/(alpha k f0)`,
+which is **-3.3 ms** at `delta = 0.109` for an 8-20 kHz 20 ms sweep. An HFM under
+Doppler moves a long way before it fades.
+
+### 8.4 The consequence
+
+Over ±20 m/s at 1 dB straddling loss, for the same 8-20 kHz 20 ms sweep:
+
+| waveform | bins needed |
+|---|---|
+| CW | 14 |
+| LFM | 5 |
+| **HFM** | **2** |
+
+That ratio is the design argument for hyperbolic sweeps stated as a number, and
+it is a direct cost: each bin is another correlation per block and another
+`FftSize * sizeof(Complex)` of replica spectrum.
+
+---
+
+## 9. Echo synthesis
+
+### 9.1 Delay and Doppler are both two-way
+
+```
+dt    = 2 dr / c
+alpha = (c + v) / (c - v)  ~  1 + 2 v/c
+```
+
+The exact form is used rather than `1 + 2v/c`: at 30 m/s they differ by 0.4%,
+which is four samples of delay across a 20 ms pulse — enough for a matched
+filter to notice.
+
+The factor of two in each is the single most likely place for a sign or scale
+error, so both are verified by a closed loop: an echo synthesised at a stated
+range and velocity is fed back through the analyser and must come out with the
+range and velocity it went in with.
+
+### 9.2 Anti-phase cancellation
+
+For a residual timing error `tau` between the cancelling pulse and the echo,
+the residual power over a flat band of width `B` centred on `f_c` is
+
+```
+G^2 = 2 - 2 cos(2 pi f_c tau) sinc(B tau)
+```
+
+For any real sonar `f_c >> B`, so the cosine dominates and **bandwidth is
+almost irrelevant** — widening a 12 kHz-centred band from 0 to 12 kHz with a
+2 µs error moves the residual by 0.3 dB. The limit is timing:
+
+```
+tau_max = asin(10^(G/20) / 2) / (pi f_c)
+```
+
+| cancellation | timing budget | path budget at 1500 m/s |
+|---|---|---|
+| −6 dB | 6.7 µs | 10.1 mm |
+| −10 dB | 4.2 µs | 6.3 mm |
+| −20 dB | 1.3 µs | 2.0 mm |
+| −30 dB | 0.42 µs | 0.63 mm |
+
+And past a quarter period the canceller **adds** energy — up to +6 dB.
+
+Two effects this omits, both of which make the real figure worse: hull
+scattering is distributed over many wavelengths, so a point projector cannot
+match phase at more than one bearing; and a canceller cannot emit the inverse of
+a sample it has not yet received, so `tau` has a floor set by acquisition and
+processing latency, orders of magnitude above 1.3 µs.
+
+**Conclusion.** Generating false targets is the achievable countermeasure.
+Cancelling the real one is not, and the library says so with numbers rather than
+implementing something that would not work.

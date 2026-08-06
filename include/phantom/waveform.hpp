@@ -92,6 +92,36 @@ std::size_t render_analytic(const PulseSpec& spec, Real sample_rate_hz,
 std::size_t render_real_doppler(const PulseSpec& spec, Real sample_rate_hz,
                                 Real doppler, std::span<Real> out) noexcept;
 
+// The analytic form of the same, used as a Doppler-bin replica.
+std::size_t render_analytic_doppler(const PulseSpec& spec, Real sample_rate_hz,
+                                    Real doppler, std::span<Complex> out) noexcept;
+
+// The Doppler mismatch |delta| = |v|/c at which the matched filter peak drops
+// by `max_loss_db`. This is what sets how many Doppler bins a bank needs.
+//
+// Derived per family, because they behave completely differently:
+//
+//   CW   the output is sinc(delta * f0 * T); expanding to second order,
+//        delta = sqrt(6 (1 - a)) / (pi f0 T),   a = 10^(-L/20)
+//
+//   LFM  a mismatched chirp leaves a residual quadratic phase B t^2 with
+//        B = mu delta. Removing its least-squares linear part (the delay the
+//        detector picks up as a range bias) leaves an RMS phase of
+//        2 pi TB delta / sqrt(180), and loss_dB = 4.343 sigma^2. Hence
+//        delta_1dB is almost exactly 1/TB.
+//
+//   HFM  time scaling maps the family onto itself, so there is no phase
+//        residual at all -- only the duration mismatch, an amplitude factor of
+//        (1 - |delta|). Two orders of magnitude more tolerant than an LFM of
+//        the same time-bandwidth product, which is the whole reason it is used.
+//
+// VALIDITY: these are small-mismatch expansions. They are accurate to a few
+// dB of loss -- the regime a bank is actually designed around -- and are NOT a
+// model of deep mismatch. Beyond ~5 dB the true loss saturates while the LFM
+// expression runs away (it predicts 49 dB where 9.9 dB is measured). Use it to
+// space bins, not to predict what happens outside the bank.
+[[nodiscard]] Real doppler_tolerance(const PulseSpec& spec, Real max_loss_db) noexcept;
+
 }  // namespace phantom
 
 #endif  // PHANTOM_WAVEFORM_HPP
