@@ -1000,3 +1000,92 @@ Ten times the elements is ten times the aperture is a tenth of the beamwidth is
 §12.4 charges for the ensonified area. The array also buys 10 dB of gain against
 isotropic noise over the same change. Two different mechanisms, and here they
 happen to agree.
+
+---
+
+## 14. Wideband and adaptive beamforming
+
+§13 built an array and then measured why it could not be used: phase steering
+holds to 91 Hz of bandwidth at 45°, and this library transmits 12 kHz chirps.
+
+### 14.1 Per-bin steering
+
+A phase shift that is wrong across a band is exactly right *within* one bin. So
+transform, steer bin by bin, transform back:
+
+```
+Y[k] = sum_n  w_n  X_n[k]  exp(-j 2 pi f_k tau_n),     tau_n = x_n sin(theta) / c
+```
+
+This is an exact fractional delay, not an interpolation of one. Two details
+decide whether it works:
+
+- **Bins above M/2 carry negative frequencies**, `f_k = (k−M)·fs/M`. Steering
+  them with the positive value breaks the spectrum's Hermitian symmetry and the
+  inverse transform returns noise that still looks like a signal.
+- **The forward model's sign must match the steering convention.** The element
+  at `+x` sees the wavefront *earlier*, so its time series is further into the
+  waveform: `t = (i − at)/fs + x sin θ / c`. Getting this backwards steers every
+  beam to the mirror bearing — which looks like a working beamformer until you
+  check where it points.
+
+The test suite pins the second one structurally: a narrowband tone pushed
+through the wideband path must reproduce `array_factor` in closed form, which a
+mirrored convention cannot do.
+
+**Cost.** Transforming every element once costs `N·M` complex values;
+re-transforming per beam costs nothing extra in memory but runs `N` FFTs per
+beam instead of `N` in total. For 24 elements and 61 beams that is 1464
+transforms against 24, so the storage is almost always the right side of the
+trade — hence the two-stage API.
+
+### 14.2 Shading
+
+The shaded array factor is the discrete-time Fourier transform of the window, so
+its sidelobe level *is* the window's — these are the familiar numbers, not
+array-specific ones:
+
+| window | peak sidelobe | mainlobe width | gain given up |
+|---|---|---|---|
+| Uniform | −13.26 dB | ×1.00 | 0 dB |
+| Hann | −31.5 dB | ×1.64 | −1.76 dB |
+| Hamming | −42.7 dB | ×1.47 | −1.34 dB |
+| Blackman | −58.1 dB | ×1.90 | −2.37 dB |
+
+Shading loss is `10 log₁₀[ (Σw)² / (N Σw²) ]`, always negative: a window trades
+gain and resolution for sidelobes, and there is no free direction.
+
+### 14.3 MVDR
+
+Conventional beamforming cannot resolve two sources closer than about one
+null-to-peak spacing,
+
+```
+delta_theta ~ lambda / (N d cos theta)
+```
+
+**whatever the SNR** — the resolution is set by the aperture and nothing else.
+MVDR is not bound by it, because it places nulls instead of scanning a fixed
+pattern:
+
+```
+P(theta) = 1 / (a^H R^-1 a)
+```
+
+Solved by complex Cholesky rather than an explicit inverse: `R` is Hermitian
+positive definite after loading, so `R = L L^H` and one forward/back
+substitution per steering angle.
+
+**Diagonal loading is not optional.** With fewer snapshots than elements `R` is
+singular and the factorisation fails outright; even with enough snapshots it is
+ill-conditioned whenever a source is strong. The library reports the failure
+rather than returning noise shaped like a spectrum. Loading is expressed as a
+fraction of the mean diagonal power, and it trades resolution for stability.
+
+Measured on a 16-element half-wave array whose conventional limit is 7.16°:
+**two sources 4.30° apart give one conventional peak and two MVDR peaks**, at
+±2.145° against a truth of ±2.149°.
+
+MVDR needs the sources to be mutually incoherent. Two coherent arrivals — the
+multipath of §10.6, for instance — defeat it, and would need spatial smoothing
+that this library does not implement.

@@ -5,7 +5,7 @@ Zero dependencies, zero heap allocation, C++20.
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 ![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)
-![Status](https://img.shields.io/badge/status-v0.7%20arrays%20%2B%20bearing-orange.svg)
+![Status](https://img.shields.io/badge/status-v0.8%20wideband%20beams%20%2B%20MVDR-orange.svg)
 ![Validated](https://img.shields.io/badge/validated-vs%20Bellhop-brightgreen.svg)
 
 ![Munk deep sound channel propagation](data/munk_rays.png)
@@ -138,6 +138,46 @@ dt = -(v/c) · f_end / mu
 Verified on upsweeps, downsweeps and narrow sweeps — the narrowband formula is
 off by 13 samples on the 8-16 kHz case where the wideband form agrees within 3.
 Derivation in [`docs/math_spec.md §6.2`](docs/math_spec.md).
+
+**A 12 kHz chirp, steered 37× beyond where phase steering dies.** v0.7 measured
+the limit and this release fixes it: a phase shift that is wrong across a band
+is exactly right *within* one bin, so steer bin by bin.
+
+```
+phase-steering limit at 35 deg : 325 Hz
+signal bandwidth               : 12000 Hz  -- 37x over
+beam energy on target          : 23.80 dB
+best off-target beam           :  6.79 dB
+matched filter peak            : lag 400, pulse placed at 400
+```
+
+That last line is the one that matters — a phase-steered beam would smear the
+chirp and move its peak.
+
+**The check that earned its place immediately.** A narrowband tone pushed
+through the *wideband* path must reproduce the closed-form array factor, and it
+does to 5e-3. The first version of the test harness delayed the `+x` element
+instead of advancing it, and every beam steered to the mirror bearing — which
+looks like a working beamformer until you check where it points. An energy
+contrast test said only "the contrast is poor"; this one said "the pattern is
+mirrored".
+
+**MVDR resolves what the aperture cannot.** Conventional beamforming cannot
+separate two sources closer than one null-to-peak spacing *whatever the SNR* —
+resolution is set by the aperture and nothing else. MVDR places nulls instead:
+
+| | conventional limit 7.16°, sources 4.30° apart |
+|---|---|
+| conventional `aᴴRa` | **1 peak** |
+| MVDR `1/aᴴR⁻¹a` | **2 peaks**, at ±2.145° against ±2.149° truth |
+
+Solved by complex Cholesky rather than an explicit inverse. Diagonal loading is
+verified as *necessary*: a rank-1 covariance over 16 elements fails the
+factorisation outright, and the library reports that rather than returning noise
+shaped like a spectrum.
+
+**And the PDW finally has a direction.** The analyser run per beam: a source at
+−22° peaks in the −20° beam of a 5° scan, at 38 dB.
 
 **Bearing comes from phase across the aperture, not from which beam lit up.**
 The Cramér-Rao bound for a line array is the spatial twin of v0.2's
@@ -379,12 +419,14 @@ tells you the code did not change. These tell you it is right:
 | Source level cancelling from E/R, 9 SL×TL combinations | identical to 1e-4 dB |
 | Array first sidelobe vs the −13.26 dB uniform-shading limit | −13.260 at N=128 |
 | Bearing estimator vs its Cramér-Rao bound | 0.99–1.13× across 14 dB |
+| Wideband beam vs the closed-form array factor | 5e-3 worst |
+| Shading sidelobes vs published window values | −13.3 / −31.5 / −42.7 / −58.1 dB |
 | FFT vs a direct O(N²) DFT sharing no code | 2.3e-16 relative |
 | FFT correlation vs direct O(N·L) correlation | 1.1e-15 relative |
 | Matched filter peak, width, coherent gain | `A·E/2`, `1/B`, `L/2` — all matched |
 | Waveform classification, 4 types at −4.4 dB SNR | 100/100 |
 
-40915 checks. Clean under GCC 15 and Clang 21 with `-Wconversion -Wsign-conversion
+40964 checks. Clean under GCC 15 and Clang 21 with `-Wconversion -Wsign-conversion
 -Wold-style-cast -Wdouble-promotion -Werror`, and under ASan + UBSan. Passes in
 both `double` and `float` builds. Zero allocation is proven by `nm` over the
 built archive, not asserted: the library references only libm and `memset`.
@@ -497,11 +539,12 @@ Stated plainly, because the gaps matter more than the features:
   by a 20 ms template and mis-reported in both time and type — shown
   deliberately in `countermeasure_loop`.
 - **Doppler is quantised and the range bias is measured, not corrected.**
-- **Narrowband beamforming only**, with the bandwidth limit stated but not
-  worked around; no wideband steering.
-- **Uniform line arrays only** — no shading, no planar geometry, one source.
-- **The array is not wired into the analyser.** Beamforming and pulse analysis
-  are separate pieces; a per-beam detector is v0.8.
+- **MVDR needs incoherent sources.** The coherent multipath this same library
+  produces defeats it; spatial smoothing would fix that and is not implemented.
+- **No tracking.** A PDW carries a bearing, but nothing associates detections
+  across blocks.
+- **Uniform line arrays only** — no planar geometry, no element directivity, no
+  calibration errors.
 - **Ray theory, with its caustics.** Levels near a caustic are flagged rather
   than computed; a correct treatment needs a wave solution through them.
 - **Reverberation is a level, not a field.** The envelope has the right level

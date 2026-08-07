@@ -604,14 +604,90 @@ traversal time. For a 32-element half-wave array: 249 Hz of usable bandwidth at
 phase-steered array cannot handle them off broadside. `narrowband_bandwidth_limit_hz`
 returns the number.
 
-## 10. Build and runtime hygiene ✅
+## 10. Wideband and adaptive beamforming — verified ✅
+
+### The structural check that caught a sign error
+
+A narrowband tone pushed through the **wideband** path must reproduce
+`array_factor` in **closed form**. Worst departure across 21 steer angles:
+**5e-3**.
+
+That test earned its place immediately. The first version of the test harness
+delayed the element at `+x` instead of advancing it — the mirror of
+`synthesize_plane_wave`'s convention — and the beamformer duly steered every
+beam to the wrong side. The energy-contrast test only said the contrast was
+poor; this one said the pattern was mirrored.
+
+### Wideband steering where phase steering fails
+
+16-element half-wave array, 5 ms LFM over 8–20 kHz, source at 35°:
+
+| | |
+|---|---|
+| phase-steering bandwidth limit at 35° | 325 Hz |
+| signal bandwidth | 12000 Hz — **37× over** |
+| beam energy on target | 23.80 dB |
+| best off-target beam | 6.79 dB |
+| contrast | **17.0 dB** |
+| matched filter peak | lag **400**, pulse placed at 400 |
+
+The peak landing exactly on the placement is the part that matters: a
+phase-steered beam would smear the chirp and move it.
+
+### A PDW that carries a bearing
+
+The analyser run on each of 17 beams, source at −22° with noise:
+
+| beam | detections | SNR |
+|---|---|---|
+| −25° | 1 | 37.83 dB |
+| **−20°** | 2 | **38.33 dB** |
+| −15° | 1 | 24.43 dB |
+| 0° | 1 | 14.85 dB |
+
+Strongest beam −20° against a −22° truth, on a 5° scan grid.
+
+### Shading
+
+Peak sidelobe measured from the shaded pattern, against the published window
+values:
+
+| window | measured | published | width ×uniform | loss |
+|---|---|---|---|---|
+| Uniform | −13.26 dB | −13.26 | 1.00 | 0.00 dB |
+| Hann | −31.5 dB | −31.5 | 1.64 | −1.76 dB |
+| Hamming | −42.7 dB | −42.7 | 1.47 | −1.34 dB |
+| Blackman | −58.1 dB | −58.1 | 1.90 | −2.37 dB |
+
+Every window widens the mainlobe and gives up gain: verified as an assertion,
+not just observed.
+
+### MVDR resolves what the aperture cannot
+
+16-element half-wave array, conventional resolution limit **7.16°**, two
+incoherent sources **4.30°** apart:
+
+| beamformer | peaks found |
+|---|---|
+| conventional (a^H R a) | **1** |
+| MVDR (1 / a^H R⁻¹ a) | **2**, at ±2.145° against a truth of ±2.149° |
+
+And MVDR agrees with conventional on a single source (11.000° vs 10.988° for an
+11° truth), so the resolution is not bought with a bias.
+
+**Diagonal loading is verified as necessary, not decorative.** A rank-1
+covariance over 16 elements: unloaded, the Cholesky fails and `mvdr_power`
+returns 0; with 1% loading it returns a spectrum. Reporting the failure beats
+returning noise shaped like an answer.
+
+## 11. Build and runtime hygiene ✅
 
 | Configuration | Result |
 |---|---|
 | GCC 15.3, `-Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion -Wold-style-cast -Wcast-qual -Wdouble-promotion -Werror` | clean |
 | Clang 21.1, same set | clean |
-| AddressSanitizer + UndefinedBehaviorSanitizer | clean, 40915 checks |
-| `Real = float` (`-DPHANTOM_REAL_FLOAT=ON`) | 40915 checks pass |
+| AddressSanitizer + UndefinedBehaviorSanitizer | clean, 40964 checks |
+| `Real = float` (`-DPHANTOM_REAL_FLOAT=ON`) | 40964 checks pass |
 | Heap allocations during execution | **zero** — proven by `nm` over the built archive: the library references only libm and `memset` |
 
 ### float vs double
@@ -629,7 +705,7 @@ layers:
 acceptable if you are differencing travel times for ranging. Use `double` unless
 your FPU forces otherwise.
 
-## 11. Performance (measured, not claimed)
+## 12. Performance (measured, not claimed)
 
 13th Gen Intel Core i7-13620H, `-O3`, single thread:
 
@@ -669,7 +745,7 @@ actually constrains a control loop, and measures **52 ns**. Re-run
 guarantee; these numbers are not a substitute for WCET analysis on the target
 silicon.
 
-## 12. Self-consistent but NOT independently verified ⚠️
+## 13. Self-consistent but NOT independently verified ⚠️
 
 - **Chapman-Harris surface backscatter coefficients.** The formula is written
   out in the header so a reader can check it, and its behaviour is verified
@@ -690,7 +766,7 @@ silicon.
 - **Real measured T/S profiles.** Everything so far uses analytic profiles
   (Munk, linear, isovelocity). Feeding World Ocean Atlas / Argo data is v0.2.
 
-## 13. Known limitations — not bugs, scope ⚠️
+## 14. Known limitations — not bugs, scope ⚠️
 
 - **Shadow fraction depends on ray density.** Gaps between adjacent rays read as
   shadow. Measured convergence for the 100 km Munk case on a 500×250 grid:
@@ -720,21 +796,21 @@ silicon.
   frequency-dependent.
 - **2-D (range–depth) only.** No azimuthal coupling or out-of-plane refraction.
 
-## 14. Not implemented in v0.7
+## 15. Not implemented in v0.8
 
 `BioMimeticCommEngine` is not in this release. See `docs/roadmap.md`.
 
 Known gaps within what *is* shipped:
 
-- **Narrowband beamforming only.** Phase steering, with the bandwidth limit
-  above stated but not worked around. Wideband beamforming (per-bin or
-  delay-and-sum with interpolation) is not implemented.
-- **Uniform line arrays only.** No shading, no planar or volumetric geometry,
-  no element directivity, no mutual coupling.
-- **One source.** The estimator finds a peak; two sources inside a beamwidth
-  are not resolved, and nothing adaptive (MVDR, MUSIC) is implemented.
-- **The array is not wired into the analyser.** Beamforming and pulse analysis
-  are separate; a per-beam detector is the obvious next step and does not exist.
+- **MVDR needs incoherent sources.** Two coherent arrivals — the multipath of
+  §6, for instance — defeat it. Spatial smoothing would fix that and is not
+  implemented.
+- **No tracking.** A PDW now carries a bearing, but nothing associates
+  detections across blocks into a track.
+- **Uniform line arrays only** — no planar or volumetric geometry, no element
+  directivity, no mutual coupling, no calibration errors.
+- **No beam-space reverberation.** The reverberation model is still the sonar
+  equation with a scalar beamwidth, not a per-beam field.
 - **Reverberation is a level, not a field**, and does not come from the traced
   paths.
 - **Ray theory, with its caustics**; plane-wave flat-interface reflection.
@@ -746,7 +822,7 @@ Known gaps within what *is* shipped:
 ```bash
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
-./build/phantom_tests          # 40915 checks
+./build/phantom_tests          # 40964 checks
 ./build/phantom_bench          # timing table above
 ./build/munk_simulation data   # CSV + console report
 ./build/ping_intercept data    # streaming ping detection demo

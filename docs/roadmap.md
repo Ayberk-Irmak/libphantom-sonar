@@ -93,7 +93,7 @@ really fighting at short range.
 - A reverberation envelope generator, and a demonstration that CA-CFAR tracks a
   21.6 dB decay across a block where no fixed threshold can
 
-## v0.7 — Arrays and bearing ✅ *(current)*
+## v0.7 — Arrays and bearing ✅
 
 The last purely structural gap: everything before this was single-channel.
 
@@ -107,20 +107,35 @@ The last purely structural gap: everything before this was single-channel.
 - The bandwidth limit phase steering carries -- 91 Hz at 45 degrees for an
   array whose own waveforms are 12 kHz wide
 
-## v0.8 — Beams meet the detector
+## v0.8 — Beams meet the detector ✅ *(current)*
 
-The array and the pulse analyser are still separate pieces. Joining them is
-what turns a bearing into a track.
+v0.7 built an array and measured why it could not be used with this library's
+own waveforms. This closes that, and joins the array to the analyser.
 
-- [ ] Wideband beamforming: per-bin, or delay-and-sum with interpolation, so a
-      12 kHz chirp can actually be steered off broadside.
-- [ ] A per-beam detector: the analyser run on each beam, so a PDW carries a
-      bearing.
-- [ ] Adaptive beamforming (MVDR) and a resolution comparison against the
-      conventional beamformer's beamwidth limit.
-- [ ] Array shading, and the sidelobe/beamwidth trade it buys.
+- Wideband per-bin beamforming: exact fractional delay, verified against the
+  closed-form array factor to 5e-3
+- A 12 kHz chirp steered 37x beyond the phase-steering limit, with the matched
+  filter peak landing exactly where the pulse was placed
+- The analyser run per beam, so a Pulse Descriptor Word carries a bearing
+- Shading, with the sidelobe/beamwidth/gain trade measured against the
+  published window values
+- MVDR: two sources 4.30 degrees apart resolved where the conventional
+  aperture limit is 7.16, by Cholesky rather than an explicit inverse
+- Diagonal loading verified as necessary rather than decorative
 
-## v0.9 — Real data
+## v0.9 — Tracking
+
+A PDW now carries time, type, Doppler and bearing. Nothing yet connects them
+across blocks, which is what turns detections into a picture.
+
+- [ ] Detection-to-track association across blocks: gating, and the
+      cross-template ghosts of v0.2 finally suppressed by consistency over time
+      rather than within a block.
+- [ ] A target state estimator over range, bearing and range-rate.
+- [ ] Track quality and the false-track rate the CFAR settings imply.
+- [ ] Spatial smoothing, so MVDR survives the coherent multipath v0.4 produces.
+
+## v0.10 — Real data
 
 - [x] **Bellhop cross-validation.** Done in v0.1.1. Both codes read the same
       `.env`; Bellhop converges toward the analytic arc solution as its step
@@ -130,7 +145,7 @@ what turns a bearing into a track.
 - [ ] **Real T/S profiles.** World Ocean Atlas (WOA23) and Argo float ingest;
       ship two or three real regional profiles in `data/` with provenance.
 
-## v0.10 — Covert acoustic communication
+## v0.11 — Covert acoustic communication
 
 - [ ] DSSS modulator/demodulator with configurable chip rate and explicit
       processing gain `10·log10(N)`
@@ -143,14 +158,14 @@ what turns a bearing into a track.
 - [ ] Bio-mimetic waveform shaping (spectral masking against ambient noise and
       biological transients)
 
-## v0.11 — Bindings and portability
+## v0.12 — Bindings and portability
 
 - [ ] Stable C ABI (`phantom.h`, hand-written, no generator)
 - [ ] Rust `phantom-sonar-sys` + safe wrapper crate
 - [ ] Cortex-M7 / RISC-V cross-compilation in CI with size and WCET reporting
 - [ ] `-fno-exceptions -fno-rtti` build mode
 
-## v0.12 — Hardware in the loop
+## v0.13 — Hardware in the loop
 
 See `docs/hardware.md` for the bench design and the bill of materials. Bench and
 tank only — a real acoustic transmitter in open water is a regulatory and
