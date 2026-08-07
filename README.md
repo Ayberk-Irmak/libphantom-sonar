@@ -5,7 +5,7 @@ Zero dependencies, zero heap allocation, C++20.
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 ![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)
-![Status](https://img.shields.io/badge/status-v0.8%20wideband%20beams%20%2B%20MVDR-orange.svg)
+![Status](https://img.shields.io/badge/status-v0.9%20detections%20to%20tracks-orange.svg)
 ![Validated](https://img.shields.io/badge/validated-vs%20Bellhop-brightgreen.svg)
 
 ![Munk deep sound channel propagation](data/munk_rays.png)
@@ -138,6 +138,35 @@ dt = -(v/c) · f_end / mu
 Verified on upsweeps, downsweeps and narrow sweeps — the narrowband formula is
 off by 13 samples on the 8-16 kHz case where the wideband form agrees within 3.
 Derivation in [`docs/math_spec.md §6.2`](docs/math_spec.md).
+
+**A filter that lies about its covariance still tracks.** It just gates correct
+measurements out, or accepts clutter, and nothing in its output says so. The
+normalised innovation squared is chi-square with 2 degrees of freedom when the
+filter is right, so that is what gets checked:
+
+| statistic | measured | expected |
+|---|---|---|
+| mean NIS over 1980 samples | **1.951** | 2.000 |
+| under the 95% gate | **95.0%** | 95% |
+| under the 99% gate | **99.0%** | 99% |
+
+Position error falls from 50.97 m raw to **20.89 m** filtered, and velocity —
+which a single detection cannot know at all — comes out at (4.17, −7.18) against
+a truth of (4.00, −7.00).
+
+**And a roadmap claim, corrected in public.** v0.8's roadmap said tracking would
+finally suppress the cross-template ghosts that have been a documented
+limitation since v0.2. **It does not.** A ghost arrives whenever the real
+detection does, at a fixed offset, so it is exactly as consistent over time as
+the target and forms its own perfectly healthy track:
+
+```
+494 false alarms over 300 scans  ->  0 confirmed tracks
+one target + its ghost           ->  2 confirmed tracks
+```
+
+Tracking kills false alarms, which do not repeat. Ghosts repeat. The test suite
+asserts the honest outcome so the correction cannot quietly rot.
 
 **A 12 kHz chirp, steered 37× beyond where phase steering dies.** v0.7 measured
 the limit and this release fixes it: a phase shift that is wrong across a band
@@ -421,12 +450,13 @@ tells you the code did not change. These tell you it is right:
 | Bearing estimator vs its Cramér-Rao bound | 0.99–1.13× across 14 dB |
 | Wideband beam vs the closed-form array factor | 5e-3 worst |
 | Shading sidelobes vs published window values | −13.3 / −31.5 / −42.7 / −58.1 dB |
+| Tracker NIS vs its chi-square distribution | mean 1.951 vs 2, gates 95.0/99.0% |
 | FFT vs a direct O(N²) DFT sharing no code | 2.3e-16 relative |
 | FFT correlation vs direct O(N·L) correlation | 1.1e-15 relative |
 | Matched filter peak, width, coherent gain | `A·E/2`, `1/B`, `L/2` — all matched |
 | Waveform classification, 4 types at −4.4 dB SNR | 100/100 |
 
-40964 checks. Clean under GCC 15 and Clang 21 with `-Wconversion -Wsign-conversion
+41008 checks. Clean under GCC 15 and Clang 21 with `-Wconversion -Wsign-conversion
 -Wold-style-cast -Wdouble-promotion -Werror`, and under ASan + UBSan. Passes in
 both `double` and `float` builds. Zero allocation is proven by `nm` over the
 built archive, not asserted: the library references only libm and `memset`.
@@ -541,8 +571,10 @@ Stated plainly, because the gaps matter more than the features:
 - **Doppler is quantised and the range bias is measured, not corrected.**
 - **MVDR needs incoherent sources.** The coherent multipath this same library
   produces defeats it; spatial smoothing would fix that and is not implemented.
-- **No tracking.** A PDW carries a bearing, but nothing associates detections
-  across blocks.
+- **Cross-template ghosts survive tracking**, as measured above. Suppressing
+  them needs the offset and amplitude ratio recognised as a template artefact.
+- **Constant-velocity model only**, greedy association, and the Doppler bank's
+  directly-measured closing rate is not yet fused into the filter.
 - **Uniform line arrays only** — no planar geometry, no element directivity, no
   calibration errors.
 - **Ray theory, with its caustics.** Levels near a caustic are flagged rather

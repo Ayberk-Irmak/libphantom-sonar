@@ -107,7 +107,7 @@ The last purely structural gap: everything before this was single-channel.
 - The bandwidth limit phase steering carries -- 91 Hz at 45 degrees for an
   array whose own waveforms are 12 kHz wide
 
-## v0.8 — Beams meet the detector ✅ *(current)*
+## v0.8 — Beams meet the detector ✅
 
 v0.7 built an array and measured why it could not be used with this library's
 own waveforms. This closes that, and joins the array to the analyser.
@@ -123,19 +123,37 @@ own waveforms. This closes that, and joins the array to the analyser.
   aperture limit is 7.16, by Cholesky rather than an explicit inverse
 - Diagonal loading verified as necessary rather than decorative
 
-## v0.9 — Tracking
+## v0.9 — Tracking ✅ *(current)*
 
-A PDW now carries time, type, Doppler and bearing. Nothing yet connects them
-across blocks, which is what turns detections into a picture.
+- An EKF over a constant-velocity target: Cartesian dynamics, polar
+  measurements, with the nonlinearity confined to the measurement Jacobian
+- Filter consistency verified where it counts -- NIS mean 1.951 against a
+  2-dof expectation of 2.000, with 95.0% and 99.0% under their gates. A filter
+  that tracks well and reports the wrong covariance passes every position test
+  and fails this one.
+- Chi-square gating, greedy association, M-of-N confirmation and coasting
+- 494 false alarms over 300 scans produce zero confirmed tracks
+- **A roadmap claim corrected**: v0.8 said tracking would suppress the
+  cross-template ghosts of v0.2. It does not, and the test suite now asserts
+  the honest outcome. Ghosts repeat; false alarms do not, and only the latter
+  are what time consistency removes.
 
-- [ ] Detection-to-track association across blocks: gating, and the
-      cross-template ghosts of v0.2 finally suppressed by consistency over time
-      rather than within a block.
-- [ ] A target state estimator over range, bearing and range-rate.
-- [ ] Track quality and the false-track rate the CFAR settings imply.
+## v0.10 — Fusing what is already measured
+
+Several quantities are measured twice by different subsystems and never
+compared. Joining them is cheaper than any new physics and worth more.
+
+- [ ] Feed the Doppler bank's closing rate into the tracker as a third
+      measurement. It is measured directly and currently thrown away.
+- [ ] Ghost suppression by template-artefact recognition: a fixed offset and
+      amplitude ratio matching a known cross-correlation is not a target.
+- [ ] Global nearest-neighbour or JPDA association, so crossing targets do not
+      swap tracks.
 - [ ] Spatial smoothing, so MVDR survives the coherent multipath v0.4 produces.
+- [ ] An interacting-multiple-model filter, so a manoeuvre is modelled rather
+      than absorbed as process noise.
 
-## v0.10 — Real data
+## v0.11 — Real data
 
 - [x] **Bellhop cross-validation.** Done in v0.1.1. Both codes read the same
       `.env`; Bellhop converges toward the analytic arc solution as its step
@@ -145,7 +163,7 @@ across blocks, which is what turns detections into a picture.
 - [ ] **Real T/S profiles.** World Ocean Atlas (WOA23) and Argo float ingest;
       ship two or three real regional profiles in `data/` with provenance.
 
-## v0.11 — Covert acoustic communication
+## v0.12 — Covert acoustic communication
 
 - [ ] DSSS modulator/demodulator with configurable chip rate and explicit
       processing gain `10·log10(N)`
@@ -158,14 +176,14 @@ across blocks, which is what turns detections into a picture.
 - [ ] Bio-mimetic waveform shaping (spectral masking against ambient noise and
       biological transients)
 
-## v0.12 — Bindings and portability
+## v0.13 — Bindings and portability
 
 - [ ] Stable C ABI (`phantom.h`, hand-written, no generator)
 - [ ] Rust `phantom-sonar-sys` + safe wrapper crate
 - [ ] Cortex-M7 / RISC-V cross-compilation in CI with size and WCET reporting
 - [ ] `-fno-exceptions -fno-rtti` build mode
 
-## v0.13 — Hardware in the loop
+## v0.14 — Hardware in the loop
 
 See `docs/hardware.md` for the bench design and the bill of materials. Bench and
 tank only — a real acoustic transmitter in open water is a regulatory and

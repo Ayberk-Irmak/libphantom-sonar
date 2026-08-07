@@ -680,14 +680,73 @@ covariance over 16 elements: unloaded, the Cholesky fails and `mvdr_power`
 returns 0; with 1% loading it returns a spectrum. Reporting the failure beats
 returning noise shaped like an answer.
 
-## 11. Build and runtime hygiene ✅
+## 11. Tracking — verified ✅
+
+### Filter consistency: the check that finds what position tests cannot
+
+A Kalman filter whose covariance is wrong still tracks. It just lies about how
+well, and then gates correct measurements out or accepts clutter, with nothing
+in its output to say so. The normalised innovation squared is chi-square with
+2 degrees of freedom when the filter is consistent:
+
+| statistic | measured | expected |
+|---|---|---|
+| mean NIS (1980 samples) | **1.951** | 2.000 |
+| fraction under the 95% gate | **95.0%** | 95% |
+| fraction under the 99% gate | **99.0%** | 99% |
+
+### What the filter is worth
+
+| quantity | result |
+|---|---|
+| RMS position error, raw | 50.97 m |
+| RMS position error, filtered | **20.89 m** — 2.44× better |
+| velocity (truth 4.00, −7.00) | (4.17, −7.18) |
+| closing rate (truth 7.486 m/s) | 7.683 m/s |
+
+Closing rate matters twice over: the Doppler bank of §5 measures it directly,
+so the tracker and the bank are two independent routes to the same number.
+
+### Gating
+
+The chi-square gate inverts in closed form (`−2 ln(1−p)`): 5.991 at 95%, 9.210
+at 99%, verified to 0.002. On a converged track: NIS **0.268** on target,
+**652.7** for a measurement 300 m off, **319.0** for one 20° off.
+
+### Track management
+
+| scenario | result |
+|---|---|
+| one target, one isolated false alarm, 8 scans | **1 confirmed, 0 tentative** |
+| 494 false alarms scattered over 300 scans | **0 confirmed tracks** |
+| one missed scan | coasts, then reacquires and re-confirms |
+| three missed scans | deleted |
+| two well-separated targets | 2 confirmed, each on its own target |
+
+### A roadmap claim, corrected
+
+The v0.8 roadmap said tracking would finally suppress the cross-template ghosts
+of §4. **That was wrong**, and the test suite says so rather than the claim
+being quietly dropped.
+
+A ghost appears whenever the real arrival does, at a fixed offset set by the
+template cross-correlation. It is therefore *exactly* as consistent over time as
+the target, moves with it, and forms its own perfectly healthy confirmed track.
+Measured: one target plus its ghost gives **two** confirmed tracks, and the test
+asserts that outcome so the correction cannot rot.
+
+Tracking kills false alarms — which do not repeat — decisively. Ghosts repeat.
+Suppressing them needs the offset and amplitude ratio recognised as a template
+artefact, which is a different mechanism and is not implemented.
+
+## 12. Build and runtime hygiene ✅
 
 | Configuration | Result |
 |---|---|
 | GCC 15.3, `-Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion -Wold-style-cast -Wcast-qual -Wdouble-promotion -Werror` | clean |
 | Clang 21.1, same set | clean |
-| AddressSanitizer + UndefinedBehaviorSanitizer | clean, 40964 checks |
-| `Real = float` (`-DPHANTOM_REAL_FLOAT=ON`) | 40964 checks pass |
+| AddressSanitizer + UndefinedBehaviorSanitizer | clean, 41008 checks |
+| `Real = float` (`-DPHANTOM_REAL_FLOAT=ON`) | 41008 checks pass |
 | Heap allocations during execution | **zero** — proven by `nm` over the built archive: the library references only libm and `memset` |
 
 ### float vs double
@@ -705,7 +764,7 @@ layers:
 acceptable if you are differencing travel times for ranging. Use `double` unless
 your FPU forces otherwise.
 
-## 12. Performance (measured, not claimed)
+## 13. Performance (measured, not claimed)
 
 13th Gen Intel Core i7-13620H, `-O3`, single thread:
 
@@ -745,7 +804,7 @@ actually constrains a control loop, and measures **52 ns**. Re-run
 guarantee; these numbers are not a substitute for WCET analysis on the target
 silicon.
 
-## 13. Self-consistent but NOT independently verified ⚠️
+## 14. Self-consistent but NOT independently verified ⚠️
 
 - **Chapman-Harris surface backscatter coefficients.** The formula is written
   out in the header so a reader can check it, and its behaviour is verified
@@ -766,7 +825,7 @@ silicon.
 - **Real measured T/S profiles.** Everything so far uses analytic profiles
   (Munk, linear, isovelocity). Feeding World Ocean Atlas / Argo data is v0.2.
 
-## 14. Known limitations — not bugs, scope ⚠️
+## 15. Known limitations — not bugs, scope ⚠️
 
 - **Shadow fraction depends on ray density.** Gaps between adjacent rays read as
   shadow. Measured convergence for the 100 km Munk case on a 500×250 grid:
@@ -796,33 +855,34 @@ silicon.
   frequency-dependent.
 - **2-D (range–depth) only.** No azimuthal coupling or out-of-plane refraction.
 
-## 15. Not implemented in v0.8
+## 16. Not implemented in v0.9
 
 `BioMimeticCommEngine` is not in this release. See `docs/roadmap.md`.
 
 Known gaps within what *is* shipped:
 
-- **MVDR needs incoherent sources.** Two coherent arrivals — the multipath of
-  §6, for instance — defeat it. Spatial smoothing would fix that and is not
-  implemented.
-- **No tracking.** A PDW now carries a bearing, but nothing associates
-  detections across blocks into a track.
-- **Uniform line arrays only** — no planar or volumetric geometry, no element
-  directivity, no mutual coupling, no calibration errors.
-- **No beam-space reverberation.** The reverberation model is still the sonar
-  equation with a scalar beamwidth, not a per-beam field.
+- **Cross-template ghosts survive tracking**, as §11 measures. They need the
+  fixed offset and amplitude ratio recognised as a template artefact.
+- **Greedy association.** A global assignment does better when two targets
+  cross; the failure mode here is a track swap.
+- **Single model.** Constant velocity only — no manoeuvre model, no IMM, so a
+  hard turn is absorbed as process noise or gated out.
+- **No range-rate measurement fusion.** The Doppler bank measures closing rate
+  directly and the tracker does not use it; it only infers velocity from
+  position history.
+- **MVDR needs incoherent sources**; no spatial smoothing.
+- **Uniform line arrays only**; narrowband element model.
 - **Reverberation is a level, not a field**, and does not come from the traced
   paths.
-- **Ray theory, with its caustics**; plane-wave flat-interface reflection.
-- **Monostatic multipath**, range-independent ocean.
-- **Cross-template ghosts** in the analyser bank.
+- **Ray theory, with its caustics**; plane-wave flat-interface reflection;
+  monostatic multipath; range-independent ocean.
 
 ## Reproducing
 
 ```bash
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
-./build/phantom_tests          # 40964 checks
+./build/phantom_tests          # 41008 checks
 ./build/phantom_bench          # timing table above
 ./build/munk_simulation data   # CSV + console report
 ./build/ping_intercept data    # streaming ping detection demo

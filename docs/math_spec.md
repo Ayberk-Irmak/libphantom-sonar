@@ -1089,3 +1089,108 @@ Measured on a 16-element half-wave array whose conventional limit is 7.16°:
 MVDR needs the sources to be mutually incoherent. Two coherent arrivals — the
 multipath of §10.6, for instance — defeat it, and would need spatial smoothing
 that this library does not implement.
+
+---
+
+## 15. Tracking
+
+A Pulse Descriptor Word carries time, type, Doppler and — since §14 — bearing.
+Nothing connected them across blocks, which is what turns a list of detections
+into a picture.
+
+### 15.1 The model
+
+Constant velocity in Cartesian coordinates, measured in polar. Cartesian because
+the dynamics are then **linear**; polar because that is what a sonar produces.
+All the nonlinearity lives in the measurement Jacobian.
+
+State `[x, y, vx, vy]` with `y` along broadside, so `bearing = atan2(x, y)` —
+the same convention as §13.
+
+```
+F = [[1,0,dt,0],[0,1,0,dt],[0,0,1,0],[0,0,0,1]]
+
+Q = q [[dt^4/4, 0, dt^3/2, 0], [0, dt^4/4, 0, dt^3/2],
+       [dt^3/2, 0, dt^2,   0], [0, dt^3/2, 0, dt^2  ]],   q = sigma_a^2
+```
+
+discrete white-noise acceleration. `sigma_a` is the single knob that sets how
+much manoeuvre the filter expects: too small and it lags a turn, too large and
+it chases noise.
+
+Measurement `z = [r, theta]` with `r = sqrt(x²+y²)`, `theta = atan2(x, y)`:
+
+```
+H = [[ x/r,   y/r,  0, 0],
+     [ y/r^2, -x/r^2, 0, 0]]
+```
+
+The bearing innovation is wrapped to `[-pi, pi]` before use; without that, a
+track sitting near ±180° produces a 2π innovation and diverges on the first
+update.
+
+### 15.2 The consistency check that matters
+
+The normalised innovation squared,
+
+```
+d^2 = y^T S^-1 y,     S = H P H^T + R
+```
+
+is **chi-square with 2 degrees of freedom** when the filter is consistent. Its
+mean must be 2 and 95% of samples must fall below 5.991.
+
+This is the test worth running. A filter whose covariance is wrong still tracks
+— it just lies about how well, and then gates correct measurements out or
+accepts clutter, with nothing in its output to say so. Measured over 1980
+samples: **mean 1.951**, with 95.0% under the 95% gate and 99.0% under the 99%.
+
+The chi-square CDF with 2 dof is `1 - exp(-x/2)`, so a gate inverts in closed
+form and needs no table:
+
+```
+chi2(p) = -2 ln(1 - p)      5.991 at 95%,  9.210 at 99%
+```
+
+### 15.3 What tracking is worth
+
+| quantity | result |
+|---|---|
+| RMS position error, raw measurement | 50.97 m |
+| RMS position error, filtered | **20.89 m** (2.44× better) |
+| velocity, truth (4.00, −7.00) | estimated (4.17, −7.18) |
+| closing rate, truth 7.486 m/s | tracked 7.683 m/s |
+
+Velocity is the interesting one: a single detection cannot know it at all, and
+it is what lets a track coast through a missed scan.
+
+### 15.4 What tracking fixes, and what it does not
+
+**False alarms: decisively.** They do not repeat, so M-of-N confirmation
+removes them. Measured: **494 false alarms scattered over 300 scans produced
+zero confirmed tracks.**
+
+**Cross-template ghosts: not at all.** The roadmap for this release claimed time
+consistency would finally suppress the ghosts of §7.6. **That claim was wrong.**
+A ghost appears whenever the real arrival does, at a fixed offset set by the
+template cross-correlation, so it is exactly as consistent over time as the
+target, moves with it, and forms its own perfectly healthy confirmed track.
+Nothing about its kinematics is objectionable.
+
+Measured: one target plus its ghost gives **two** confirmed tracks. The test
+asserts that outcome so the correction cannot quietly rot.
+
+Suppressing ghosts needs the fixed offset and amplitude ratio to be recognised
+as a template artefact — a different mechanism entirely, and one this library
+does not implement.
+
+### 15.5 Association
+
+Greedy nearest-neighbour on the NIS, gated at `chi2`. Not optimal: a global
+assignment does better when two targets cross. But it is
+`O(tracks × measurements)` with no allocation, and its failure mode — a swap
+during a crossing — is well understood rather than surprising.
+
+`(I − KH)P` is symmetrised after each update. It is symmetric in exact
+arithmetic and drifts out of it in floating point; an asymmetric covariance
+eventually goes indefinite and the filter diverges with no warning at all.

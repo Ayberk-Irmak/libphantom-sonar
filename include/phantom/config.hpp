@@ -7,9 +7,9 @@
 #include <cstdint>
 
 #define PHANTOM_VERSION_MAJOR 0
-#define PHANTOM_VERSION_MINOR 8
+#define PHANTOM_VERSION_MINOR 9
 #define PHANTOM_VERSION_PATCH 0
-#define PHANTOM_VERSION_STRING "0.8.0"
+#define PHANTOM_VERSION_STRING "0.9.0"
 
 namespace phantom {
 
