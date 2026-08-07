@@ -879,3 +879,124 @@ below the near field and 12.2 dB above the far field.
 CA-CFAR estimates the background locally and tracks the decay, provided the
 training window is short compared to it — 20/20 detections of a target buried in
 the decayed region, with 3 false alarms across 20 empty blocks.
+
+---
+
+## 13. Line arrays, beamforming and bearing
+
+Everything before this release was single-channel. A hydrophone knows *when* a
+ping arrived and what shape it was, but not where from — and §12 showed that
+reverberation scales with the ensonified area, of which the azimuthal half can
+only be shrunk with a beam.
+
+Angles are from **broadside**: 0 perpendicular to the array, ±π/2 endfire. That
+makes `sin θ` the natural variable, and every formula below is written in it.
+
+### 13.1 The array factor
+
+For a uniform line array of `N` elements at spacing `d`, steered to `θ₀`:
+
+```
+psi = k d (sin(theta) - sin(theta_0)),      k = 2 pi / lambda
+B   = | sin(N psi / 2) / (N sin(psi / 2)) |
+```
+
+Its closed forms are what the test suite checks against, because a beam pattern
+that is subtly wrong still looks like a beam:
+
+| property | value |
+|---|---|
+| peak | `B = 1` at `psi = 0`, exactly |
+| nulls | `psi = 2 pi m / N`, i.e. `sin(theta) - sin(theta_0) = m lambda / (N d)` |
+| first sidelobe | **−13.26 dB** as `N -> inf` (−12.80 at N=8, −13.26 at N=128) |
+| −3 dB width | `0.886 lambda / (N d cos theta_0)` |
+
+The `cos θ₀` in the beamwidth is the projected aperture: a beam steered to 60°
+is twice as broad as the same beam at broadside, and the exact null position
+follows from `asin(sin θ₀ + λ/(Nd)) − θ₀` rather than the small-angle form.
+
+**Grating lobes** appear where `psi = ±2π`, i.e. `sin θ = sin θ₀ ± λ/d`, which
+is real only when that lands inside `[−1, 1]`. Hence
+
+```
+d <= lambda / (1 + |sin(theta_max)|)
+```
+
+and steering to endfire demands the familiar `d ≤ λ/2`.
+
+### 13.2 Array gain
+
+`AG = 10 log₁₀(N)` against spatially white noise: the signal adds coherently
+(amplitude ×N) and the noise does not (×√N), so power SNR improves by N.
+Measured by Monte Carlo through the actual beamformer: 5.92 / 12.07 / 18.36 dB
+for N = 4 / 16 / 64, against 6.02 / 12.04 / 18.06 predicted.
+
+This assumes the noise is uncorrelated between elements. Isotropic ambient
+roughly is at `d ≥ λ/2`; directional interference emphatically is not.
+
+### 13.3 The bearing bound — the spatial twin of §7.2
+
+Exactly the same derivation as the arrival-time bound, with the element index
+in place of time:
+
+```
+var(theta) >= 6 / (rho (k d cos theta)^2 N (N^2 - 1))
+```
+
+where `rho` is the per-element SNR in power. The `N(N²−1)/12` is `Σ n'²` about
+the array centre — the spatial counterpart of the waveform's mean-square
+bandwidth.
+
+Two consequences read straight off it:
+
+- **`N^(-3/2)`, not `N^(-1/2)`.** More elements buy both more signal *and* more
+  aperture. Doubling N improves the bound by `2^1.5 = 2.828`; measured 2.845 /
+  2.833 / 2.830 across N = 8 → 64.
+- **`1/cos θ`.** A target at endfire is far harder to place than one at
+  broadside, because the projected aperture shrinks to nothing.
+
+A 32-element half-wavelength array at 0 dB element SNR is bounded at 0.247°
+against a 3.17° beamwidth — **one thirteenth of a beam**. Bearing comes from
+phase across the aperture, not from which beam lit up.
+
+The conventional beamformer with parabolic peak refinement measures **1.13 /
+1.02 / 0.99 ×** that bound across 14 dB of SNR.
+
+### 13.4 Split-beam
+
+Beamform the two halves separately; the phase between them gives bearing
+directly:
+
+```
+dphi = k D (sin theta - sin theta_0),     D = (N/2) d
+```
+
+`|dphi| = pi` exactly at the first null, so split-beam is unambiguous precisely
+out to the mainlobe edge and wraps beyond it. It refines a bearing already known
+to within the beam; it cannot find one outside it. Noiseless accuracy is exact
+to 1e-16.
+
+### 13.5 The bandwidth limit phase steering carries
+
+A phase-steered array approximates a delay-steered one only while the signal
+stays correlated across the array's traversal time `(N−1) d sin θ / c`. Taking a
+tenth of its inverse as the usable bandwidth:
+
+| steer | traversal | usable BW |
+|---|---|---|
+| 0° | 0 | unlimited |
+| 15° | 0.40 ms | 249 Hz |
+| 45° | 1.10 ms | 91 Hz |
+
+The library's own waveforms are 12 kHz chirps. A phase-steered array **cannot**
+handle them off broadside; a real receiver beamforms per frequency bin or steers
+with delays. Saying so is cheaper than shipping a beamformer that quietly smears
+the beam.
+
+### 13.6 Where this joins §12
+
+Ten times the elements is ten times the aperture is a tenth of the beamwidth is
+**exactly 10 dB** of echo-to-reverberation ratio — the same 10 dB per decade
+§12.4 charges for the ensonified area. The array also buys 10 dB of gain against
+isotropic noise over the same change. Two different mechanisms, and here they
+happen to agree.

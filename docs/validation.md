@@ -528,14 +528,90 @@ decayed region, 3 false alarms across 20 empty blocks. A single fixed threshold
 at the block mean sits 9.5 dB below the near field and 12.2 dB above the far
 field — wrong at both ends, which is precisely the gap CFAR closes.
 
-## 9. Build and runtime hygiene ✅
+## 9. Arrays, beamforming and bearing — verified ✅
+
+### Beam pattern closed forms
+
+| property | check | result |
+|---|---|---|
+| Peak | `B = 1` at the steer angle, and nothing exceeds it over ±90° | exact |
+| Nulls | `sin θ − sin θ₀ = m λ/(Nd)` for m = 1…4 | `\|B\|` < 1e-15 |
+| Steered nulls | `asin(sin θ₀ + λ/Nd) − θ₀`, at 0° / 30° / 60° | exact, and wider when steered |
+| First sidelobe | −12.797 / −13.147 / −13.233 / −13.254 / **−13.260** dB for N = 8…128 | converges to −13.26 |
+| Grating lobes | flagged iff a full-height repeat actually exists (`\|B\| > 0.9` away from the beam) | consistent |
+| `d ≤ λ/(1+\|sin θ_max\|)` | λ/2 for endfire, λ for broadside-only | exact |
+
+### Array gain, measured not asserted
+
+Monte Carlo through the actual beamformer, 400 trials each:
+
+| N | 10 log₁₀(N) | measured |
+|---|---|---|
+| 4 | 6.021 | 5.916 |
+| 16 | 12.041 | 12.069 |
+| 64 | 18.062 | 18.355 |
+
+### Bearing against the Cramér-Rao bound
+
+The spatial twin of §4's arrival-time bound. Both structural properties of
+`var ≥ 6/(ρ (kd cos θ)² N(N²−1))` verified:
+
+| N | CRLB | ratio to N/2 (theory 2.828) |
+|---|---|---|
+| 8 | 1.98991° | — |
+| 16 | 0.69939° | 2.8452 |
+| 32 | 0.24691° | 2.8326 |
+| 64 | 0.08726° | 2.8295 |
+
+and the `1/cos θ` degradation reproduced to 1e-6 at 0° / 30° / 60° / 75°.
+
+**The estimator sits on the bound.** Conventional beamforming with parabolic
+peak refinement, 400 trials per point:
+
+| noise σ | measured | CRLB | ratio |
+|---|---|---|---|
+| 2.0 | 0.56146° | 0.49752° | **1.13** |
+| 1.0 | 0.25297° | 0.24876° | **1.02** |
+| 0.4 | 0.09866° | 0.09950° | **0.99** |
+
+No factor-of-four surprise this time — unlike v0.2's arrival-time estimator,
+where the coherent and envelope bounds differ by 4.16 and picking the wrong one
+made an efficient estimator look broken. Here there is no carrier to lose: the
+phase gradient across the aperture *is* the signal.
+
+A 32-element half-wave array resolves bearing to **one thirteenth of its own
+beamwidth** (0.247° against 3.17°).
+
+### Split-beam
+
+Exact to 1e-16 in the noiseless case across the mainlobe, unambiguous precisely
+out to the first null (3.583° for this array), and demonstrably wrapping beyond
+it — a source at 8.96° reads as 1.76°. That is the documented limit, not a
+defect.
+
+### Joining up with §8
+
+Ten times the elements gives a tenth of the beamwidth gives **exactly 10.00 dB**
+of echo-to-reverberation ratio, matching what §8 charges per decade of
+ensonified area. The same change buys 10.0 dB of array gain against isotropic
+noise. Two independent mechanisms agreeing is a stronger check than either alone.
+
+### A limit the library states rather than hides
+
+Phase steering holds only while the signal stays correlated across the array's
+traversal time. For a 32-element half-wave array: 249 Hz of usable bandwidth at
+15°, 91 Hz at 45°. **The library's own waveforms are 12 kHz chirps**, so a
+phase-steered array cannot handle them off broadside. `narrowband_bandwidth_limit_hz`
+returns the number.
+
+## 10. Build and runtime hygiene ✅
 
 | Configuration | Result |
 |---|---|
 | GCC 15.3, `-Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion -Wold-style-cast -Wcast-qual -Wdouble-promotion -Werror` | clean |
 | Clang 21.1, same set | clean |
-| AddressSanitizer + UndefinedBehaviorSanitizer | clean, 39926 checks |
-| `Real = float` (`-DPHANTOM_REAL_FLOAT=ON`) | 39926 checks pass |
+| AddressSanitizer + UndefinedBehaviorSanitizer | clean, 40915 checks |
+| `Real = float` (`-DPHANTOM_REAL_FLOAT=ON`) | 40915 checks pass |
 | Heap allocations during execution | **zero** — proven by `nm` over the built archive: the library references only libm and `memset` |
 
 ### float vs double
@@ -553,7 +629,7 @@ layers:
 acceptable if you are differencing travel times for ranging. Use `double` unless
 your FPU forces otherwise.
 
-## 10. Performance (measured, not claimed)
+## 11. Performance (measured, not claimed)
 
 13th Gen Intel Core i7-13620H, `-O3`, single thread:
 
@@ -593,7 +669,7 @@ actually constrains a control loop, and measures **52 ns**. Re-run
 guarantee; these numbers are not a substitute for WCET analysis on the target
 silicon.
 
-## 11. Self-consistent but NOT independently verified ⚠️
+## 12. Self-consistent but NOT independently verified ⚠️
 
 - **Chapman-Harris surface backscatter coefficients.** The formula is written
   out in the header so a reader can check it, and its behaviour is verified
@@ -614,7 +690,7 @@ silicon.
 - **Real measured T/S profiles.** Everything so far uses analytic profiles
   (Munk, linear, isovelocity). Feeding World Ocean Atlas / Argo data is v0.2.
 
-## 12. Known limitations — not bugs, scope ⚠️
+## 13. Known limitations — not bugs, scope ⚠️
 
 - **Shadow fraction depends on ray density.** Gaps between adjacent rays read as
   shadow. Measured convergence for the 100 km Munk case on a 500×250 grid:
@@ -644,34 +720,33 @@ silicon.
   frequency-dependent.
 - **2-D (range–depth) only.** No azimuthal coupling or out-of-plane refraction.
 
-## 13. Not implemented in v0.6
+## 14. Not implemented in v0.7
 
 `BioMimeticCommEngine` is not in this release. See `docs/roadmap.md`.
 
 Known gaps within what *is* shipped:
 
-- **Reverberation is a level, not a field.** The envelope generator gives the
-  right level and the right post-correlation statistics, but a true series is
-  the scatterer field convolved with the transmitted pulse and is therefore
-  correlated over the pulse length. White noise scaled by the envelope is
-  correlated over one sample. Do not use it to study anything that depends on
-  the pre-correlation spectrum.
-- **No bistatic reverberation**, and no reverberation from the traced ray paths
-  — the level comes from the sonar equation with spherical spreading, not from
-  the eigenrays.
-- **Scattering strengths are empirical fits** with no frequency dependence for
-  Lambert and no verified coefficients for Chapman-Harris.
+- **Narrowband beamforming only.** Phase steering, with the bandwidth limit
+  above stated but not worked around. Wideband beamforming (per-bin or
+  delay-and-sum with interpolation) is not implemented.
+- **Uniform line arrays only.** No shading, no planar or volumetric geometry,
+  no element directivity, no mutual coupling.
+- **One source.** The estimator finds a peak; two sources inside a beamwidth
+  are not resolved, and nothing adaptive (MVDR, MUSIC) is implemented.
+- **The array is not wired into the analyser.** Beamforming and pulse analysis
+  are separate; a per-beam detector is the obvious next step and does not exist.
+- **Reverberation is a level, not a field**, and does not come from the traced
+  paths.
 - **Ray theory, with its caustics**; plane-wave flat-interface reflection.
 - **Monostatic multipath**, range-independent ocean.
 - **Cross-template ghosts** in the analyser bank.
-- **No bearing.** Single channel.
 
 ## Reproducing
 
 ```bash
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
-./build/phantom_tests          # 39926 checks
+./build/phantom_tests          # 40915 checks
 ./build/phantom_bench          # timing table above
 ./build/munk_simulation data   # CSV + console report
 ./build/ping_intercept data    # streaming ping detection demo

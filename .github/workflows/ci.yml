@@ -211,6 +211,9 @@ jobs:
           # Reverberation must still show the SL/TL cancellation argument.
           grep -q "echo-to-reverberation ratio" loop.txt
           grep -q "a louder transmitter buys nothing" loop.txt
+          # The array section must still report a sub-beamwidth bearing bound.
+          grep -q "If this vehicle carried an array" loop.txt
+          grep -q "bearing is bounded at" loop.txt
 
       - uses: actions/upload-artifact@v4
         with:

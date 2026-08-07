@@ -79,7 +79,7 @@ used to reflect perfectly, and in shallow water most paths bounce.
 - Grazing angles at each bounce from the Snell invariant, exact
 - A 200 m duct at 3 km: paths that sat within 1 dB now span 128 dB
 
-## v0.6 — Reverberation ✅ *(current)*
+## v0.6 — Reverberation ✅
 
 Where the energy v0.5 capped away actually goes, and what an active sonar is
 really fighting at short range.
@@ -93,19 +93,34 @@ really fighting at short range.
 - A reverberation envelope generator, and a demonstration that CA-CFAR tracks a
   21.6 dB decay across a block where no fixed threshold can
 
-## v0.7 — Arrays and bearing
+## v0.7 — Arrays and bearing ✅ *(current)*
 
-Everything so far is single-channel, which means no bearing and no spatial
-processing. That is the largest remaining structural gap.
+The last purely structural gap: everything before this was single-channel.
 
-- [ ] Line array geometry, delay-and-sum beamforming, beam patterns.
-- [ ] Bearing estimation and its Cramer-Rao bound, the spatial twin of the
-      arrival-time bound already verified in v0.2.
-- [ ] Array gain against isotropic noise, and directional reverberation --
-      the narrower beam that v0.6 showed is worth 10 dB per factor of ten.
-- [ ] Split-beam or interferometric bearing for a compact array.
+- Line array geometry, the array factor and its closed forms -- peak, nulls,
+  the -13.26 dB first sidelobe, grating-lobe spacing
+- Array gain, measured through the beamformer rather than asserted
+- The bearing Cramer-Rao bound, the spatial twin of v0.2's arrival-time bound:
+  N^(-3/2) scaling and 1/cos(theta) degradation both verified, and the
+  estimator lands at 0.99-1.13x of it
+- Split-beam bearing, exact across the mainlobe and wrapping beyond it
+- The bandwidth limit phase steering carries -- 91 Hz at 45 degrees for an
+  array whose own waveforms are 12 kHz wide
 
-## v0.8 — Real data
+## v0.8 — Beams meet the detector
+
+The array and the pulse analyser are still separate pieces. Joining them is
+what turns a bearing into a track.
+
+- [ ] Wideband beamforming: per-bin, or delay-and-sum with interpolation, so a
+      12 kHz chirp can actually be steered off broadside.
+- [ ] A per-beam detector: the analyser run on each beam, so a PDW carries a
+      bearing.
+- [ ] Adaptive beamforming (MVDR) and a resolution comparison against the
+      conventional beamformer's beamwidth limit.
+- [ ] Array shading, and the sidelobe/beamwidth trade it buys.
+
+## v0.9 — Real data
 
 - [x] **Bellhop cross-validation.** Done in v0.1.1. Both codes read the same
       `.env`; Bellhop converges toward the analytic arc solution as its step
@@ -115,7 +130,7 @@ processing. That is the largest remaining structural gap.
 - [ ] **Real T/S profiles.** World Ocean Atlas (WOA23) and Argo float ingest;
       ship two or three real regional profiles in `data/` with provenance.
 
-## v0.9 — Covert acoustic communication
+## v0.10 — Covert acoustic communication
 
 - [ ] DSSS modulator/demodulator with configurable chip rate and explicit
       processing gain `10·log10(N)`
@@ -128,14 +143,14 @@ processing. That is the largest remaining structural gap.
 - [ ] Bio-mimetic waveform shaping (spectral masking against ambient noise and
       biological transients)
 
-## v0.10 — Bindings and portability
+## v0.11 — Bindings and portability
 
 - [ ] Stable C ABI (`phantom.h`, hand-written, no generator)
 - [ ] Rust `phantom-sonar-sys` + safe wrapper crate
 - [ ] Cortex-M7 / RISC-V cross-compilation in CI with size and WCET reporting
 - [ ] `-fno-exceptions -fno-rtti` build mode
 
-## v0.11 — Hardware in the loop
+## v0.12 — Hardware in the loop
 
 See `docs/hardware.md` for the bench design and the bill of materials. Bench and
 tank only — a real acoustic transmitter in open water is a regulatory and

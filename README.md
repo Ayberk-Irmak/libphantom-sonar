@@ -5,7 +5,7 @@ Zero dependencies, zero heap allocation, C++20.
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 ![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)
-![Status](https://img.shields.io/badge/status-v0.6%20reverberation-orange.svg)
+![Status](https://img.shields.io/badge/status-v0.7%20arrays%20%2B%20bearing-orange.svg)
 ![Validated](https://img.shields.io/badge/validated-vs%20Bellhop-brightgreen.svg)
 
 ![Munk deep sound channel propagation](data/munk_rays.png)
@@ -138,6 +138,49 @@ dt = -(v/c) · f_end / mu
 Verified on upsweeps, downsweeps and narrow sweeps — the narrowband formula is
 off by 13 samples on the 8-16 kHz case where the wideband form agrees within 3.
 Derivation in [`docs/math_spec.md §6.2`](docs/math_spec.md).
+
+**Bearing comes from phase across the aperture, not from which beam lit up.**
+The Cramér-Rao bound for a line array is the spatial twin of v0.2's
+arrival-time bound — the element index takes the place of time, and
+`Σn'² = N(N²−1)/12` about the array centre takes the place of the waveform's
+mean-square bandwidth:
+
+```
+var(θ) ≥ 6 / (ρ · (k d cos θ)² · N(N²−1))
+```
+
+Two things fall straight out of it. Accuracy improves as **N^(−3/2)**, not
+N^(−1/2), because elements buy signal *and* aperture — doubling N gains
+2^1.5 = 2.828, measured 2.845 / 2.833 / 2.830. And it degrades as **1/cos θ**,
+because a target at endfire sees no projected aperture at all.
+
+A 32-element half-wave array is bounded at **0.247° against a 3.17° beamwidth**
+— one thirteenth of a beam. Conventional beamforming with parabolic peak
+refinement measures **1.13 / 1.02 / 0.99 ×** that bound across 14 dB of SNR.
+
+| N | CRLB | ratio to N/2 |
+|---|---|---|
+| 16 | 0.69939° | 2.8452 |
+| 32 | 0.24691° | 2.8326 |
+| 64 | 0.08726° | 2.8295 |
+
+**The beam pattern is pinned by its closed forms**, because one that is subtly
+wrong still looks like a beam: unity at the steer angle, nulls at
+`sin θ − sin θ₀ = mλ/(Nd)`, and a first sidelobe converging to the **−13.26 dB**
+signature of uniform shading (−12.797 at N=8, −13.260 at N=128).
+
+**And the array joins up with the reverberation result.** Ten times the elements
+is a tenth of the beamwidth is **exactly 10.00 dB** of echo-to-reverberation
+ratio — the same 10 dB per decade of ensonified area. It also buys 10.0 dB of
+array gain against isotropic noise. Two independent mechanisms agreeing is a
+stronger check than either alone.
+
+**One limit is stated rather than hidden.** Phase steering holds only while the
+signal stays correlated across the array's traversal time: 249 Hz of usable
+bandwidth at 15°, **91 Hz at 45°**. The library's own waveforms are 12 kHz
+chirps, so a phase-steered array cannot handle them off broadside.
+`narrowband_bandwidth_limit_hz` returns that number instead of the beamformer
+quietly smearing.
 
 **Against reverberation, a bigger transmitter buys nothing.** Write the echo and
 the reverberation with the same source level and the same two-way loss:
@@ -334,12 +377,14 @@ tells you the code did not change. These tell you it is right:
 | Critical angle, normal incidence, sub-critical unity | exact to 1e-10 |
 | Reverberation decay: 30 log r boundary, 20 log r volume | exact |
 | Source level cancelling from E/R, 9 SL×TL combinations | identical to 1e-4 dB |
+| Array first sidelobe vs the −13.26 dB uniform-shading limit | −13.260 at N=128 |
+| Bearing estimator vs its Cramér-Rao bound | 0.99–1.13× across 14 dB |
 | FFT vs a direct O(N²) DFT sharing no code | 2.3e-16 relative |
 | FFT correlation vs direct O(N·L) correlation | 1.1e-15 relative |
 | Matched filter peak, width, coherent gain | `A·E/2`, `1/B`, `L/2` — all matched |
 | Waveform classification, 4 types at −4.4 dB SNR | 100/100 |
 
-39926 checks. Clean under GCC 15 and Clang 21 with `-Wconversion -Wsign-conversion
+40915 checks. Clean under GCC 15 and Clang 21 with `-Wconversion -Wsign-conversion
 -Wold-style-cast -Wdouble-promotion -Werror`, and under ASan + UBSan. Passes in
 both `double` and `float` builds. Zero allocation is proven by `nm` over the
 built archive, not asserted: the library references only libm and `memset`.
@@ -452,7 +497,11 @@ Stated plainly, because the gaps matter more than the features:
   by a 20 ms template and mis-reported in both time and type — shown
   deliberately in `countermeasure_loop`.
 - **Doppler is quantised and the range bias is measured, not corrected.**
-- **No bearing.** Single channel; bearing needs an array.
+- **Narrowband beamforming only**, with the bandwidth limit stated but not
+  worked around; no wideband steering.
+- **Uniform line arrays only** — no shading, no planar geometry, one source.
+- **The array is not wired into the analyser.** Beamforming and pulse analysis
+  are separate pieces; a per-beam detector is v0.8.
 - **Ray theory, with its caustics.** Levels near a caustic are flagged rather
   than computed; a correct treatment needs a wave solution through them.
 - **Reverberation is a level, not a field.** The envelope has the right level

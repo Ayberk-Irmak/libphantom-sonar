@@ -10,6 +10,7 @@
 //
 //   ./countermeasure_loop
 #include "phantom/echo_synth.hpp"
+#include "phantom/array.hpp"
 #include "phantom/boundary.hpp"
 #include "phantom/eigenray.hpp"
 #include "phantom/ping_analyzer.hpp"
@@ -390,7 +391,62 @@ int main() {
                     static_cast<double>(crossover));
     }
 
-    // ---- 8. The claim this library will not make ---------------------------
+    // ---- 8. What an array would add ----------------------------------------
+    // Everything above is single-channel: this vehicle knows WHEN the ping
+    // arrived and what it was, but not where from. An array supplies bearing,
+    // and it pays for itself twice over.
+    {
+        const Real lambda = wavelength_m(ping.centre_freq_hz, c);
+        LineArray arr;
+        arr.element_count = 24;
+        arr.spacing_m = max_spacing_no_grating_lobes_m(lambda, kHalfPi);   // lambda/2
+
+        std::printf("\nIf this vehicle carried an array\n");
+        std::printf("  %zu elements at %.1f mm (lambda/2 at %.1f kHz), aperture %.2f m\n",
+                    arr.element_count, static_cast<double>(arr.spacing_m) * 1e3,
+                    static_cast<double>(ping.centre_freq_hz) / 1e3,
+                    static_cast<double>(arr.aperture_m()));
+        std::printf("  beamwidth %.2f deg broadside, %.2f deg steered to 60 deg\n",
+                    static_cast<double>(rad2deg(beamwidth_3db_rad(arr, lambda, 0))),
+                    static_cast<double>(rad2deg(beamwidth_3db_rad(
+                        arr, lambda, deg2rad(static_cast<Real>(60))))));
+        std::printf("  array gain %.1f dB against isotropic noise\n",
+                    static_cast<double>(array_gain_db(arr)));
+
+        // Bearing accuracy at the SNR this ping actually arrived with.
+        const Real element_snr = std::pow(static_cast<Real>(10),
+                                          ping.snr_db / static_cast<Real>(10))
+                               / static_cast<Real>(arr.element_count);
+        const Real crlb = bearing_crlb_rad(arr, lambda, 0, element_snr);
+        std::printf("  at the %.1f dB this ping arrived with, bearing is bounded at\n"
+                    "    %.3f deg -- one %.0fth of the beamwidth, because bearing comes\n"
+                    "    from phase across the aperture, not from which beam lit up\n",
+                    static_cast<double>(ping.snr_db),
+                    static_cast<double>(rad2deg(crlb)),
+                    static_cast<double>(beamwidth_3db_rad(arr, lambda, 0) / crlb));
+
+        // And the second payment: a narrower beam is less reverberation.
+        const Real omni_beam = static_cast<Real>(1.0);
+        const Real arr_beam = beamwidth_3db_rad(arr, lambda, 0);
+        const Real tau_eff = (ping.bandwidth_hz > 0)
+                           ? static_cast<Real>(1) / ping.bandwidth_hz : ping.duration_s;
+        const double er_omni = static_cast<double>(echo_to_reverberation_ratio_db(
+            10, static_cast<Real>(-40), ensonified_area_m2(2500, omni_beam, tau_eff, c)));
+        const double er_arr = static_cast<double>(echo_to_reverberation_ratio_db(
+            10, static_cast<Real>(-40), ensonified_area_m2(2500, arr_beam, tau_eff, c)));
+        std::printf("  and against reverberation it is worth %+.1f dB, purely from\n"
+                    "    the narrower beam shrinking the ensonified area\n",
+                    er_arr - er_omni);
+
+        std::printf("  BUT: phase steering holds only to %.0f Hz of bandwidth at 45 deg,\n"
+                    "    and this ping is %.0f Hz wide. A real receiver beamforms per\n"
+                    "    frequency bin or steers with delays.\n",
+                    static_cast<double>(narrowband_bandwidth_limit_hz(
+                        arr, deg2rad(static_cast<Real>(45)), c)),
+                    static_cast<double>(ping.bandwidth_hz));
+    }
+
+    // ---- 9. The claim this library will not make ---------------------------
     const Real fc = ping.centre_freq_hz;
     const Real tau20 = max_timing_error_s(static_cast<Real>(-20), fc);
     const Real tau10 = max_timing_error_s(static_cast<Real>(-10), fc);
