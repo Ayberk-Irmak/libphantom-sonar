@@ -28,7 +28,7 @@ TrackerConfig default_cfg() {
     cfg.process_accel_mps2 = static_cast<Real>(0.2);
     cfg.range_sigma_m = 10;
     cfg.bearing_sigma_rad = deg2rad(static_cast<Real>(1));
-    cfg.gate_chi2 = chi2_gate_2dof(static_cast<Real>(0.99));
+    cfg.gate_chi2_2dof = chi2_gate_2dof(static_cast<Real>(0.99));
     cfg.confirm_hits = 3;
     cfg.delete_misses = 3;
     return cfg;
@@ -236,23 +236,23 @@ PT_TEST(gate_admits_the_target_and_rejects_the_distant) {
     good.bearing_rad = 0;
     good.time_s = 15;
     PT_CHECK(static_cast<double>(track_nis(t, good, cfg))
-           < static_cast<double>(cfg.gate_chi2));
+           < static_cast<double>(cfg.gate_chi2_2dof));
 
     Measurement far = good;
     far.range_m = 2300;                                   // 30 sigma in range
     PT_CHECK(static_cast<double>(track_nis(t, far, cfg))
-           > static_cast<double>(cfg.gate_chi2));
+           > static_cast<double>(cfg.gate_chi2_2dof));
 
     Measurement off = good;
     off.bearing_rad = deg2rad(static_cast<Real>(20));     // 20 sigma in bearing
     PT_CHECK(static_cast<double>(track_nis(t, off, cfg))
-           > static_cast<double>(cfg.gate_chi2));
+           > static_cast<double>(cfg.gate_chi2_2dof));
 
     std::printf("       NIS: on target %.3f, 300 m off %.1f, 20 deg off %.1f (gate %.2f)\n",
                 static_cast<double>(track_nis(t, good, cfg)),
                 static_cast<double>(track_nis(t, far, cfg)),
                 static_cast<double>(track_nis(t, off, cfg)),
-                static_cast<double>(cfg.gate_chi2));
+                static_cast<double>(cfg.gate_chi2_2dof));
 
     Track dead{};
     PT_CHECK(static_cast<double>(track_nis(dead, good, cfg)) > 1e6);
@@ -484,4 +484,314 @@ PT_TEST(tracker_handles_degenerate_input) {
     track_predict(dead, 1, cfg);
     PT_CHECK(dead.state.x == before);
     PT_CHECK(dead.age == 0);
+}
+
+// ---------------------------------------------------------------------------
+// v0.10: fusing the range rate the Doppler bank already measures
+// ---------------------------------------------------------------------------
+
+PT_TEST(range_rate_fusion_keeps_the_filter_consistent) {
+    // Adding a third measurement changes the NIS distribution from 2 dof to 3.
+    // If the new Jacobian row or the new R entry is wrong the filter still
+    // tracks -- and this is the only thing that notices.
+    TrackerConfig cfg = default_cfg();
+    cfg.range_rate_sigma_mps = 2;
+    cfg.gate_chi2_3dof = chi2_gate(static_cast<Real>(0.99), 3);
+    pt::Rng rng(880808);
+
+    double sum_nis = 0;
+    std::size_t n = 0, under_95 = 0, under_99 = 0;
+    const double g95 = static_cast<double>(chi2_gate(static_cast<Real>(0.95), 3));
+    const double g99 = static_cast<double>(chi2_gate(static_cast<Real>(0.99), 3));
+
+    for (std::size_t r = 0; r < 60; ++r) {
+        Truth truth{-150.0 + 10.0 * rng.uniform(), 2400.0 + 300.0 * rng.uniform(),
+                     3.0 * rng.uniform(), -6.0 + 2.0 * rng.uniform()};
+        Track t{};
+        Measurement z0 = observe(truth, cfg, rng, 0);
+        track_initiate(t, z0, cfg, 1);
+
+        for (std::size_t k = 1; k < 40; ++k) {
+            truth.advance(1.0);
+            track_predict(t, 1, cfg);
+            Measurement z = observe(truth, cfg, rng, static_cast<Real>(k));
+            const double true_rr = -(truth.x * truth.vx + truth.y * truth.vy) / truth.range();
+            z.range_rate_mps = static_cast<Real>(
+                true_rr + static_cast<double>(cfg.range_rate_sigma_mps) * rng.normal());
+            z.has_range_rate = true;
+
+            if (k > 6) {
+                const double d = static_cast<double>(track_nis(t, z, cfg));
+                sum_nis += d;
+                ++n;
+                if (d < g95) ++under_95;
+                if (d < g99) ++under_99;
+            }
+            track_update(t, z, cfg);
+        }
+    }
+    const double mean = sum_nis / static_cast<double>(n);
+    std::printf("       3-dof gates: 95%% at %.3f, 99%% at %.3f\n", g95, g99);
+    std::printf("       %zu samples: mean NIS %.3f (dof = 3)\n", n, mean);
+    std::printf("       under the 95%% gate: %.1f%%   under the 99%%: %.1f%%\n",
+                100.0 * static_cast<double>(under_95) / static_cast<double>(n),
+                100.0 * static_cast<double>(under_99) / static_cast<double>(n));
+    PT_CHECK_NEAR(g95, 7.815, 0.01);
+    PT_CHECK_NEAR(g99, 11.345, 0.02);
+    PT_CHECK_NEAR(mean, 3.0, 0.35);
+    PT_CHECK_NEAR(static_cast<double>(under_95) / static_cast<double>(n), 0.95, 0.04);
+}
+
+PT_TEST(range_rate_fusion_sharpens_the_velocity_estimate) {
+    // The payoff. Position history infers velocity slowly; a direct measurement
+    // of its radial component observes it immediately. The improvement should
+    // be largest early, when the position history is shortest.
+    TrackerConfig cfg = default_cfg();
+    cfg.range_rate_sigma_mps = 2;
+
+    auto run = [&](bool fuse, std::size_t steps) {
+        pt::Rng rng(1357);
+        double sum_sq = 0;
+        const std::size_t runs = 60;
+        for (std::size_t r = 0; r < runs; ++r) {
+            Truth truth{200.0, 2500.0, 2.0, -6.0};
+            Track t{};
+            track_initiate(t, observe(truth, cfg, rng, 0), cfg, 1);
+            for (std::size_t k = 1; k <= steps; ++k) {
+                truth.advance(1.0);
+                track_predict(t, 1, cfg);
+                Measurement z = observe(truth, cfg, rng, static_cast<Real>(k));
+                if (fuse) {
+                    const double rr = -(truth.x * truth.vx + truth.y * truth.vy) / truth.range();
+                    z.range_rate_mps = static_cast<Real>(
+                        rr + static_cast<double>(cfg.range_rate_sigma_mps) * rng.normal());
+                    z.has_range_rate = true;
+                }
+                track_update(t, z, cfg);
+            }
+            // RADIAL velocity error. A range rate observes only the component
+            // along the line of sight, so that is the only component it can
+            // improve -- measuring total velocity error would dilute the
+            // effect with a tangential term the measurement never sees.
+            const double true_rr = -(truth.x * truth.vx + truth.y * truth.vy) / truth.range();
+            const double e = static_cast<double>(t.state.range_rate_mps()) - true_rr;
+            sum_sq += e * e;
+        }
+        return std::sqrt(sum_sq / static_cast<double>(runs));
+    };
+
+    std::printf("       radial velocity error (the only component a range rate observes)\n");
+    std::printf("       %8s %16s %16s %10s\n",
+                "scans", "position only", "with range rate", "better by");
+    for (std::size_t steps : {std::size_t(3), std::size_t(6), std::size_t(20)}) {
+        const double a = run(false, steps);
+        const double b = run(true, steps);
+        std::printf("       %8zu %14.3f m/s %14.3f m/s %9.2fx\n", steps, a, b, a / b);
+        // Fusion must never make things materially worse, but by 20 scans the
+        // filter's own estimate (0.37 m/s) is already better than the 2 m/s
+        // measurement, so there is nothing left for it to add. A measurement
+        // helps exactly while it beats the estimate you already have.
+        PT_CHECK(b < a * 1.05);
+    }
+    // The gain is largest early, when the position history is shortest and the
+    // filter has least to infer velocity from.
+    const double early = run(false, 3) / run(true, 3);
+    const double late = run(false, 20) / run(true, 20);
+    std::printf("       gain at 3 scans %.2fx, at 20 scans %.2fx -- it fades as the\n"
+                "       position history grows long enough to infer velocity itself\n",
+                early, late);
+    PT_CHECK(early > 1.5);
+    PT_CHECK(early > late);
+}
+
+PT_TEST(an_unresolved_doppler_bin_is_not_a_measurement_of_zero) {
+    // The PulseDescriptor reports 0 m/s when the bank has no Doppler coverage.
+    // Feeding that in as a measurement would pin every track's radial velocity
+    // to zero, so `has_range_rate` exists to say "the bank did not resolve it".
+    TrackerConfig cfg = default_cfg();
+    pt::Rng rng(246);
+    Truth truth{0.0, 2000.0, 0.0, -8.0};   // closing hard at 8 m/s
+
+    Track fused{}, unfused{};
+    track_initiate(fused, observe(truth, cfg, rng, 0), cfg, 1);
+    track_initiate(unfused, observe(truth, cfg, rng, 0), cfg, 2);
+
+    for (std::size_t k = 1; k <= 15; ++k) {
+        truth.advance(1.0);
+        track_predict(fused, 1, cfg);
+        track_predict(unfused, 1, cfg);
+        const Measurement base = observe(truth, cfg, rng, static_cast<Real>(k));
+
+        // The wrong thing: a zero from an unresolved bin, taken at face value.
+        Measurement wrong = base;
+        wrong.range_rate_mps = 0;
+        wrong.has_range_rate = true;
+        track_update(fused, wrong, cfg);
+
+        // The right thing: the flag left clear, so the filter ignores it.
+        track_update(unfused, base, cfg);
+    }
+    std::printf("       truth closing 8.00 m/s\n");
+    std::printf("       zero taken as a measurement -> %.3f m/s\n",
+                static_cast<double>(fused.state.range_rate_mps()));
+    std::printf("       flag left clear             -> %.3f m/s\n",
+                static_cast<double>(unfused.state.range_rate_mps()));
+    // Believing the zero drags the estimate towards it; ignoring it does not.
+    PT_CHECK(static_cast<double>(fused.state.range_rate_mps())
+           < static_cast<double>(unfused.state.range_rate_mps()));
+    PT_CHECK_NEAR(unfused.state.range_rate_mps(), 8.0, 1.5);
+}
+
+// ---------------------------------------------------------------------------
+// v0.10: ghost recognition
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Runs a two-object scenario and returns how many confirmed tracks survive
+// ghost suppression. `same_label` decides whether the second object returns the
+// same waveform as the first -- which is what separates a real formation from a
+// template artefact.
+std::size_t run_pair(double offset_m, double bearing_offset_deg, bool same_label,
+                     double amplitude_ratio, std::uint64_t seed) {
+    const TrackerConfig cfg = default_cfg();
+    GhostConfig ghost;
+    // Set the pairing tolerance from the bearing accuracy the array actually
+    // delivers -- three sigma of the measurement. Two tracks on one true
+    // bearing routinely differ by more than one sigma, so a tolerance chosen
+    // from the geometry rather than the noise never fires.
+    ghost.max_bearing_delta_rad = static_cast<Real>(3) * cfg.bearing_sigma_rad;
+    pt::Rng rng(seed);
+    clear_tracks();
+    std::uint32_t next_id = 1;
+
+    Truth truth{150.0, 2200.0, -1.0, -6.0};
+    for (std::size_t k = 0; k < 20; ++k) {
+        if (k > 0) truth.advance(1.0);
+        g_meas[0] = observe(truth, cfg, rng, static_cast<Real>(k));
+        g_meas[0].label = 1;
+        g_meas[0].amplitude = 1;
+
+        Truth second = truth;
+        const double scale = (truth.range() + offset_m) / truth.range();
+        second.x *= scale;
+        second.y *= scale;
+        second.vx *= scale;
+        second.vy *= scale;
+        g_meas[1] = observe(second, cfg, rng, static_cast<Real>(k));
+        g_meas[1].bearing_rad += deg2rad(static_cast<Real>(bearing_offset_deg));
+        g_meas[1].label = same_label ? 1 : 2;
+        g_meas[1].amplitude = static_cast<Real>(amplitude_ratio);
+
+        tracker_step(g_tracks, std::span<const Measurement>(g_meas.data(), 2),
+                     cfg, static_cast<Real>(k), next_id);
+    }
+    suppress_template_ghosts(g_tracks, ghost);
+    // Confirmed OR Coasting: a track that happened to miss the last scan is
+    // still a track, and counting only Confirmed would report a detector's
+    // miss rate rather than the number of contacts.
+    return count_established(g_tracks);
+}
+
+}  // namespace
+
+PT_TEST(ghost_recognition_removes_the_artefact) {
+    // v0.9 measured that tracking alone leaves two tracks here. Recognising the
+    // ghost as a template artefact -- same bearing, same kinematics, weaker,
+    // DIFFERENT waveform -- removes it.
+    const std::size_t n = run_pair(120.0, 0.0, /*same_label=*/false, 0.30, 4711);
+    std::printf("       target + cross-template ghost -> %zu established track(s)\n", n);
+    PT_CHECK(n == 1);
+
+    // And the survivor is the strong one, at the target's range.
+    for (const Track& t : g_tracks) {
+        if (t.status != TrackStatus::Confirmed && t.status != TrackStatus::Coasting) continue;
+        PT_CHECK(t.amplitude > static_cast<Real>(0.8));
+        PT_CHECK(t.label == 1);
+    }
+}
+
+PT_TEST(ghost_recognition_spares_genuine_targets) {
+    // The discriminating direction. Suppression must not eat real contacts.
+    // A second target at a different bearing: kept.
+    PT_CHECK(run_pair(120.0, 6.0, false, 0.30, 991) == 2);
+    // A second target of comparable strength: kept, whatever its bearing.
+    PT_CHECK(run_pair(120.0, 0.0, false, 0.95, 992) == 2);
+    // A second target far beyond any template cross-correlation lag: kept.
+    PT_CHECK(run_pair(1500.0, 0.0, false, 0.30, 993) == 2);
+    std::printf("       different bearing / comparable strength / distant: all kept\n");
+}
+
+PT_TEST(the_label_check_is_what_saves_a_line_astern_formation) {
+    // The honest failure this design avoids, demonstrated both ways.
+    //
+    // Two real targets in line astern -- same bearing, same course and speed,
+    // fixed separation, one weaker because it is further away -- are
+    // kinematically INDISTINGUISHABLE from a ghost pair. The only thing that
+    // separates them is the waveform: a ghost is by definition a different
+    // template, while two targets lit by one sonar return the same one.
+    const std::size_t with_label_check = run_pair(120.0, 0.0, /*same_label=*/true, 0.30, 5150);
+    std::printf("       line-astern formation, same waveform -> %zu tracks (kept)\n",
+                with_label_check);
+    PT_CHECK(with_label_check == 2);
+
+    // The same geometry with different waveforms is suppressed -- which is the
+    // right call for a ghost and the wrong one for two targets that happen to
+    // return different types. That residual failure mode is real and is
+    // documented rather than papered over.
+    const std::size_t without = run_pair(120.0, 0.0, false, 0.30, 5150);
+    std::printf("       same geometry, different waveforms    -> %zu track (suppressed)\n",
+                without);
+    PT_CHECK(without == 1);
+}
+
+// ---------------------------------------------------------------------------
+// v0.10: association in global cost order
+// ---------------------------------------------------------------------------
+
+PT_TEST(crossing_targets_do_not_swap_tracks) {
+    // Per-track greedy assigns in TRACK order, so whichever track is examined
+    // first takes the measurement it likes best -- even when the other track
+    // wants it far more. During a crossing that is exactly how identities swap.
+    const TrackerConfig cfg = default_cfg();
+    pt::Rng rng(31415);
+    clear_tracks();
+    std::uint32_t next_id = 1;
+
+    // Two targets converging on the same point from opposite bearings.
+    Truth a{-400.0, 2000.0, 20.0, 0.0};
+    Truth b{ 400.0, 2000.0, -20.0, 0.0};
+
+    std::uint32_t id_a = 0, id_b = 0;
+    for (std::size_t k = 0; k < 40; ++k) {
+        if (k > 0) { a.advance(1.0); b.advance(1.0); }
+        g_meas[0] = observe(a, cfg, rng, static_cast<Real>(k));
+        g_meas[1] = observe(b, cfg, rng, static_cast<Real>(k));
+        tracker_step(g_tracks, std::span<const Measurement>(g_meas.data(), 2),
+                     cfg, static_cast<Real>(k), next_id);
+
+        // Latch the identities once both are confirmed and still well apart.
+        if (k == 8) {
+            for (const Track& t : g_tracks) {
+                if (t.status != TrackStatus::Confirmed) continue;
+                if (t.state.x < 0) id_a = t.id; else id_b = t.id;
+            }
+        }
+    }
+    PT_CHECK(id_a != 0);
+    PT_CHECK(id_b != 0);
+
+    // After the crossing, the track that started on the left must be the one
+    // now on the right, and keep its identity through it.
+    std::uint32_t now_left = 0, now_right = 0;
+    for (const Track& t : g_tracks) {
+        if (t.status != TrackStatus::Confirmed) continue;
+        if (t.state.x < 0) now_left = t.id; else now_right = t.id;
+    }
+    std::printf("       before crossing: left=%u right=%u\n", id_a, id_b);
+    std::printf("       after  crossing: left=%u right=%u\n", now_left, now_right);
+    PT_CHECK(count_tracks(g_tracks, TrackStatus::Confirmed) == 2);
+    // a started left moving right, so it ends on the right.
+    PT_CHECK(now_right == id_a);
+    PT_CHECK(now_left == id_b);
 }

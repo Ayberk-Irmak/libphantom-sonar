@@ -516,3 +516,146 @@ PT_TEST(beamformer_rejects_bad_buffers) {
     PT_CHECK(conventional_resolution_limit_rad(bad, lambda, 0) == 0);
     PT_CHECK(static_cast<double>(conventional_resolution_limit_rad(a, lambda, kHalfPi)) > 1.0);
 }
+
+// ---------------------------------------------------------------------------
+// v0.10: spatial smoothing, so MVDR survives coherent multipath
+// ---------------------------------------------------------------------------
+
+PT_TEST(mvdr_fails_on_coherent_sources_and_smoothing_repairs_it) {
+    // MVDR's weakness, and the reason it is not simply better than conventional
+    // beamforming. Two COHERENT arrivals -- one signal reaching the array by two
+    // paths, which is exactly the multipath v0.4 produces -- make the covariance
+    // rank-deficient in a way diagonal loading cannot fix. The adaptive
+    // beamformer then nulls the target along with its own echo.
+    const Real lambda = wavelength_m(10000, kC);
+    const LineArray a = half_wave(kElem, lambda);
+    const Real b1 = deg2rad(static_cast<Real>(-6));
+    const Real b2 = deg2rad(static_cast<Real>(+6));
+
+    pt::Rng rng(60606);
+    static std::array<Complex, 256> tmp{};
+    covariance_clear(kElem, g_cov);
+    const std::size_t snaps = 400;
+    for (std::size_t t = 0; t < snaps; ++t) {
+        synthesize_plane_wave(a, lambda, b1, 1, g_snapshot);
+        synthesize_plane_wave(a, lambda, b2, 1, tmp);
+        // ONE source phase for both arrivals: that is what coherent means.
+        const Real p = static_cast<Real>(2.0 * kPiD * rng.uniform01());
+        const Complex rot(std::cos(p), std::sin(p));
+        for (std::size_t i = 0; i < kElem; ++i) {
+            g_snapshot[i] = (g_snapshot[i] + tmp[i] * static_cast<Real>(0.9)) * rot
+                          + Complex(static_cast<Real>(0.05 * rng.normal()),
+                                    static_cast<Real>(0.05 * rng.normal()));
+        }
+        covariance_accumulate(std::span<const Complex>(g_snapshot.data(), kElem), kElem, g_cov);
+    }
+    covariance_normalise(kElem, snaps, g_cov);
+
+    constexpr std::size_t kAngles = 1801;
+    const Real lo = deg2rad(static_cast<Real>(-20));
+    const Real hi = deg2rad(static_cast<Real>(20));
+
+    auto peaks_near = [&](std::span<const Real> p) {
+        double top = 0;
+        for (const Real v : p) top = std::max(top, static_cast<double>(v));
+        std::size_t found = 0;
+        for (std::size_t i = 1; i + 1 < p.size(); ++i) {
+            if (p[i] > p[i - 1] && p[i] > p[i + 1] && static_cast<double>(p[i]) > top * 0.25) {
+                ++found;
+            }
+        }
+        return found;
+    };
+
+    // Unsmoothed MVDR on coherent sources.
+    static std::array<Real, 4096> raw{};
+    PT_CHECK(mvdr_power(a, lambda, g_cov, static_cast<Real>(0.001), lo, hi, g_mvdr_work,
+                        std::span<Real>(raw.data(), kAngles)) == kAngles);
+    const std::size_t raw_peaks = peaks_near(std::span<const Real>(raw.data(), kAngles));
+
+    // Forward-backward smoothing over subarrays of 10 of the 16 elements.
+    constexpr std::size_t kSub = 10;
+    static std::array<Complex, kSub * kSub> smoothed{};
+    static std::array<Complex, kSub * kSub + 2 * kSub> sub_work{};
+    PT_CHECK(spatial_smooth(g_cov, kElem, kSub, smoothed));
+
+    LineArray sub = a;
+    sub.element_count = kSub;
+    static std::array<Real, 4096> sm{};
+    PT_CHECK(mvdr_power(sub, lambda, smoothed, static_cast<Real>(0.001), lo, hi, sub_work,
+                        std::span<Real>(sm.data(), kAngles)) == kAngles);
+    const std::size_t sm_peaks = peaks_near(std::span<const Real>(sm.data(), kAngles));
+
+    std::printf("       two COHERENT sources at -6 and +6 deg\n");
+    std::printf("       plain MVDR (16 elements)            : %zu peak(s)\n", raw_peaks);
+    std::printf("       forward-backward smoothed (%zu-element subarrays): %zu peak(s)\n",
+                kSub, sm_peaks);
+    PT_CHECK(sm_peaks == 2);
+
+    // The smoothed peaks land on the sources.
+    double top = 0;
+    for (std::size_t i = 0; i < kAngles; ++i) top = std::max(top, static_cast<double>(sm[i]));
+    double found[2] = {0, 0};
+    std::size_t k = 0;
+    for (std::size_t i = 1; i + 1 < kAngles && k < 2; ++i) {
+        if (sm[i] > sm[i - 1] && sm[i] > sm[i + 1] && static_cast<double>(sm[i]) > top * 0.25) {
+            found[k++] = -20.0 + 40.0 * static_cast<double>(i) / static_cast<double>(kAngles - 1);
+        }
+    }
+    std::printf("       smoothed peaks at %+.2f and %+.2f deg (truth -6, +6)\n",
+                found[0], found[1]);
+    PT_CHECK_NEAR(found[0], -6.0, 1.2);
+    PT_CHECK_NEAR(found[1], 6.0, 1.2);
+
+    // The cost, stated: smoothing spends aperture. A 10-element subarray has the
+    // resolution of a 10-element array, not a 16-element one.
+    std::printf("       cost: resolution falls from %.2f deg (16 elements) to %.2f (10)\n",
+                static_cast<double>(rad2deg(conventional_resolution_limit_rad(a, lambda, 0))),
+                static_cast<double>(rad2deg(conventional_resolution_limit_rad(sub, lambda, 0))));
+    PT_CHECK(conventional_resolution_limit_rad(sub, lambda, 0)
+           > conventional_resolution_limit_rad(a, lambda, 0));
+
+    // Rejections.
+    PT_CHECK(!spatial_smooth(g_cov, kElem, 0, smoothed));
+    PT_CHECK(!spatial_smooth(g_cov, kElem, kElem + 1, smoothed));
+    PT_CHECK(!spatial_smooth(g_cov, kElem, kSub, std::span<Complex>(smoothed.data(), 4)));
+}
+
+PT_TEST(spatial_smoothing_preserves_a_single_source) {
+    // Smoothing must not move a bearing it had no business touching.
+    const Real lambda = wavelength_m(10000, kC);
+    const LineArray a = half_wave(kElem, lambda);
+    const Real truth = deg2rad(static_cast<Real>(9));
+
+    pt::Rng rng(303);
+    covariance_clear(kElem, g_cov);
+    for (std::size_t t = 0; t < 300; ++t) {
+        synthesize_plane_wave(a, lambda, truth, 1, g_snapshot);
+        const Real p = static_cast<Real>(2.0 * kPiD * rng.uniform01());
+        const Complex rot(std::cos(p), std::sin(p));
+        for (std::size_t i = 0; i < kElem; ++i) {
+            g_snapshot[i] = g_snapshot[i] * rot
+                          + Complex(static_cast<Real>(0.1 * rng.normal()),
+                                    static_cast<Real>(0.1 * rng.normal()));
+        }
+        covariance_accumulate(std::span<const Complex>(g_snapshot.data(), kElem), kElem, g_cov);
+    }
+    covariance_normalise(kElem, 300, g_cov);
+
+    constexpr std::size_t kSub = 12;
+    static std::array<Complex, kSub * kSub> smoothed{};
+    static std::array<Complex, kSub * kSub + 2 * kSub> sub_work{};
+    PT_CHECK(spatial_smooth(g_cov, kElem, kSub, smoothed));
+
+    LineArray sub = a;
+    sub.element_count = kSub;
+    constexpr std::size_t kAngles = 1801;
+    const Real lo = deg2rad(static_cast<Real>(-30));
+    const Real hi = deg2rad(static_cast<Real>(30));
+    mvdr_power(sub, lambda, smoothed, static_cast<Real>(0.01), lo, hi, sub_work,
+               std::span<Real>(g_power.data(), kAngles));
+    const double est = static_cast<double>(rad2deg(estimate_bearing_rad(
+        std::span<const Real>(g_power.data(), kAngles), lo, hi)));
+    std::printf("       single source at 9.00 deg, smoothed MVDR reads %.3f\n", est);
+    PT_CHECK_NEAR(est, 9.0, 0.4);
+}

@@ -737,17 +737,149 @@ asserts that outcome so the correction cannot rot.
 
 Tracking kills false alarms — which do not repeat — decisively. Ghosts repeat.
 Suppressing them needs the offset and amplitude ratio recognised as a template
-artefact, which is a different mechanism and is not implemented.
+artefact, which is a different mechanism. **§12 implements it**; this section is
+kept as written because the correction, not just the eventual fix, is the point.
 
-## 12. Build and runtime hygiene ✅
+## 12. Fusing what is already measured — verified ✅
+
+Four existing outputs joined to consumers that could already have used them.
+Nothing new is measured.
+
+### Range rate: the gate must follow the dimension
+
+Fusing the Doppler bank's closing rate makes the measurement 3-dimensional, so a
+gate set for 2 dof is the wrong probability. The 3-dof quantile has no closed
+form and is bisected on the exact CDF; it reproduces the textbook values:
+
+```
+3-dof gates: 95% at 7.815, 99% at 11.345
+```
+
+Consistency survives the fusion. Over 1980 fused updates:
+
+```
+mean NIS 2.998 (theoretical 3)
+under the 95% gate: 94.7%   under the 99%: 98.9%
+```
+
+### What the range rate is worth — and when it stops being worth it
+
+Radial velocity error, the only component a range rate observes:
+
+| scans | position only | with range rate | ratio |
+|---|---|---|---|
+| 3 | 4.213 m/s | **1.220 m/s** | 3.45× |
+| 6 | 2.069 m/s | **0.649 m/s** | 3.19× |
+| 20 | 0.365 m/s | 0.368 m/s | 0.99× |
+
+**The gain fades to nothing by twenty scans**, and that is reported rather than
+buried. By then the filter's own estimate (0.365 m/s) already beats the
+σ = 2 m/s measurement, and a measurement helps exactly as long as it beats the
+estimate you have. The value is in the first few scans of a new contact — which
+is when a decision usually has to be made.
+
+The test asserts `fused < unfused × 1.05` at every step count, not
+`fused < unfused`. The first assertion was written, failed at 20 scans, and was
+found to be wrong about the physics rather than the code.
+
+### An unresolved Doppler bin is not a measurement of zero
+
+A bank that fails to resolve a shift reports 0 m/s. That is a different
+statement from "the target is stationary", and treating it as a measurement pins
+the track's radial velocity to zero:
+
+```
+truth closing                8.00 m/s
+zero taken as a measurement  5.686 m/s   (28% low)
+flag left clear              9.163 m/s
+```
+
+Hence the separate `has_range_rate` flag. This is a trap the API could have
+walked into silently, so it has a test.
+
+### Ghost recognition, and the check that makes it safe
+
+| case | result |
+|---|---|
+| target + cross-template ghost | **1** established track |
+| different bearing / comparable strength / distant | all kept |
+| line-astern formation, **same** waveform | **2 tracks (kept)** |
+| same geometry, **different** waveforms | 1 track (suppressed) |
+
+The last two rows differ **only in the waveform label**. Two real targets lit by
+one sonar return the same waveform; a ghost is by definition a different
+template. Without that check the line-astern formation would be silently
+deleted, and deleting a real target is far worse than carrying a ghost.
+
+A note on counting: the test counts Confirmed **or Coasting**. A track that
+missed the most recent scan is still a contact, and counting only Confirmed
+reports the detector's instantaneous miss rate rather than the number of
+targets. The first version of this test counted Confirmed only and failed — on
+a run where suppression had correctly not fired and one real track happened to
+be coasting.
+
+### Global-cost-ordered association
+
+Two targets crossing at 8 m/s:
+
+```
+before crossing: left=1 right=2
+after  crossing: left=2 right=1
+```
+
+Identities survive. Greedy-by-arrival-order swapped them. The fix is not an
+assignment algorithm: it builds every gating pair, sorts by NIS, and assigns
+best-first. Still greedy — but over the global cost ordering rather than over
+arrival order, which is what this case needs. The gate was not touched; a swap
+is not a gating failure, since near the crossing both measurements gate against
+both tracks perfectly well.
+
+### Spatial smoothing: MVDR's failure, and its repair
+
+Two **coherent** arrivals at ±6° — which is what §10's multipath produces, one
+arrival by two paths:
+
+| | peaks found |
+|---|---|
+| plain MVDR, 16 elements | 4 (spurious) |
+| forward-backward, 10-element subarrays | **2, at −6.00° and +6.00°** |
+
+A single incoherent source is unmoved: 9.00° truth reads 8.987° smoothed.
+
+**The cost is stated, not hidden:** resolution falls from 7.16° (16 elements) to
+11.46° (10), and a test asserts that it does. Smoothing spends aperture;
+resolving `P` coherent sources needs subarrays longer than `P`, and the library
+makes the caller choose.
+
+The first implementation had transposed indices in the backward term and updated
+in place over entries it had yet to read. It produced a matrix that still looked
+like a covariance and read a 9° source at 3.3°. The invariant that catches this
+is **persymmetry**: a correct forward-backward result has it, a transposed one
+does not.
+
+## 13. Build and runtime hygiene ✅
 
 | Configuration | Result |
 |---|---|
 | GCC 15.3, `-Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion -Wold-style-cast -Wcast-qual -Wdouble-promotion -Werror` | clean |
 | Clang 21.1, same set | clean |
-| AddressSanitizer + UndefinedBehaviorSanitizer | clean, 41008 checks |
-| `Real = float` (`-DPHANTOM_REAL_FLOAT=ON`) | 41008 checks pass |
+| AddressSanitizer + UndefinedBehaviorSanitizer | clean, 41044 checks |
+| `Real = float` (`-DPHANTOM_REAL_FLOAT=ON`) | 41044 checks pass, all four compiler × precision configurations |
 | Heap allocations during execution | **zero** — proven by `nm` over the built archive: the library references only libm and `memset` |
+
+### A false verification, and the guard added for it
+
+During v0.10 the four-configuration sweep was run with `-DPHANTOM_USE_FLOAT=ON`.
+That option does not exist — the real one is `PHANTOM_REAL_FLOAT` — and CMake
+accepts unknown `-D` values silently. Both "float" configurations were ordinary
+double builds, and all 41044 checks passed, which is exactly what makes it
+dangerous: the failure produces a *clean verification report* for a run that
+never used float.
+
+It was caught by reading the `CMakeCache.txt`, not by any test. `CMakeLists.txt`
+now rejects that name and eight other near misses with a fatal error. The
+genuine float runs were then made, and are the ones reported above; the two
+builds are confirmed distinct by the Snell drift, 7.08e-08 against 1.67e-16.
 
 ### float vs double
 
@@ -764,7 +896,7 @@ layers:
 acceptable if you are differencing travel times for ranging. Use `double` unless
 your FPU forces otherwise.
 
-## 13. Performance (measured, not claimed)
+## 14. Performance (measured, not claimed)
 
 13th Gen Intel Core i7-13620H, `-O3`, single thread:
 
@@ -804,7 +936,7 @@ actually constrains a control loop, and measures **52 ns**. Re-run
 guarantee; these numbers are not a substitute for WCET analysis on the target
 silicon.
 
-## 14. Self-consistent but NOT independently verified ⚠️
+## 15. Self-consistent but NOT independently verified ⚠️
 
 - **Chapman-Harris surface backscatter coefficients.** The formula is written
   out in the header so a reader can check it, and its behaviour is verified
@@ -825,7 +957,7 @@ silicon.
 - **Real measured T/S profiles.** Everything so far uses analytic profiles
   (Munk, linear, isovelocity). Feeding World Ocean Atlas / Argo data is v0.2.
 
-## 15. Known limitations — not bugs, scope ⚠️
+## 16. Known limitations — not bugs, scope ⚠️
 
 - **Shadow fraction depends on ray density.** Gaps between adjacent rays read as
   shadow. Measured convergence for the 100 km Munk case on a 500×250 grid:
@@ -855,22 +987,21 @@ silicon.
   frequency-dependent.
 - **2-D (range–depth) only.** No azimuthal coupling or out-of-plane refraction.
 
-## 16. Not implemented in v0.9
+## 17. Not implemented in v0.10
 
 `BioMimeticCommEngine` is not in this release. See `docs/roadmap.md`.
 
 Known gaps within what *is* shipped:
 
-- **Cross-template ghosts survive tracking**, as §11 measures. They need the
-  fixed offset and amplitude ratio recognised as a template artefact.
-- **Greedy association.** A global assignment does better when two targets
-  cross; the failure mode here is a track swap.
-- **Single model.** Constant velocity only — no manoeuvre model, no IMM, so a
-  hard turn is absorbed as process noise or gated out.
-- **No range-rate measurement fusion.** The Doppler bank measures closing rate
-  directly and the tracker does not use it; it only infers velocity from
-  position history.
-- **MVDR needs incoherent sources**; no spatial smoothing.
+- **Single motion model.** Constant velocity only — no manoeuvre model, no IMM,
+  so a hard turn is absorbed as process noise or gated out.
+- **Association is greedy over a global cost ordering**, not a Hungarian
+  assignment. It fixes the crossing case (§12) but is not provably optimal.
+- **Ghost recognition needs a waveform label.** A caller that reports the same
+  label for every detection gets no suppression — correctly, since the label is
+  the only thing separating a ghost from a real contact.
+- **Spatial smoothing spends aperture.** Resolving coherent sources costs
+  resolution, and the subarray length is the caller's choice.
 - **Uniform line arrays only**; narrowband element model.
 - **Reverberation is a level, not a field**, and does not come from the traced
   paths.
@@ -882,7 +1013,7 @@ Known gaps within what *is* shipped:
 ```bash
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
-./build/phantom_tests          # 41008 checks
+./build/phantom_tests          # 41044 checks
 ./build/phantom_bench          # timing table above
 ./build/munk_simulation data   # CSV + console report
 ./build/ping_intercept data    # streaming ping detection demo

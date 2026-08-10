@@ -23,39 +23,99 @@ inline Real wrap_pi(Real a) noexcept {
     return a;
 }
 
-// Measurement Jacobian H (2x4), row-major, for z = [range, bearing].
-void jacobian(const TargetState& s, Real r, std::array<Real, 8>& h) noexcept {
+constexpr std::size_t kMaxM = 3;   // range, bearing, and optionally range rate
+
+// Measurement Jacobian H (m x 4), row-major, for z = [range, bearing, rdot].
+//
+// The third row is where the fusion lives. With rdot = -(x vx + y vy)/r:
+//   d/dx  = -vx/r + d x / r^3      d/dvx = -x/r
+//   d/dy  = -vy/r + d y / r^3      d/dvy = -y/r
+// It is the only row that touches the velocity states, which is exactly why a
+// direct range-rate measurement observes velocity that position history can
+// only infer.
+std::size_t jacobian(const TargetState& s, Real r, bool with_rate,
+                     std::array<Real, kMaxM * kN>& h) noexcept {
     const Real r2 = r * r;
-    h[0] = s.x / r;  h[1] = s.y / r;  h[2] = kZero; h[3] = kZero;   // d range
-    h[4] = s.y / r2; h[5] = -s.x / r2; h[6] = kZero; h[7] = kZero;  // d bearing
+    h[0] = s.x / r;   h[1] = s.y / r;   h[2] = kZero; h[3] = kZero;
+    h[4] = s.y / r2;  h[5] = -s.x / r2; h[6] = kZero; h[7] = kZero;
+    if (!with_rate) return 2;
+    const Real d = s.x * s.vx + s.y * s.vy;
+    const Real r3 = r2 * r;
+    h[8]  = -s.vx / r + d * s.x / r3;
+    h[9]  = -s.vy / r + d * s.y / r3;
+    h[10] = -s.x / r;
+    h[11] = -s.y / r;
+    return 3;
 }
 
-// S = H P H^T + R, a 2x2. Returns false if it is not invertible.
-bool innovation_covariance(const Track& t, const std::array<Real, 8>& h,
-                           const TrackerConfig& cfg,
-                           Real& s00, Real& s01, Real& s11, Real& det) noexcept {
-    // PH^T is 4x2.
-    Real pht[8];
+// Cholesky factor of an m x m symmetric positive definite matrix, in place over
+// the lower triangle. Small and real, so no need for the complex version in
+// beamformer.cpp.
+bool small_cholesky(std::array<Real, kMaxM * kMaxM>& a, std::size_t m) noexcept {
+    for (std::size_t j = 0; j < m; ++j) {
+        Real d = a[j * m + j];
+        for (std::size_t k = 0; k < j; ++k) d -= a[j * m + k] * a[j * m + k];
+        if (!(d > kZero)) return false;
+        const Real ljj = std::sqrt(d);
+        a[j * m + j] = ljj;
+        for (std::size_t i = j + 1; i < m; ++i) {
+            Real acc = a[i * m + j];
+            for (std::size_t k = 0; k < j; ++k) acc -= a[i * m + k] * a[j * m + k];
+            a[i * m + j] = acc / ljj;
+        }
+    }
+    return true;
+}
+
+void small_cholesky_solve(const std::array<Real, kMaxM * kMaxM>& l, std::size_t m,
+                          std::array<Real, kMaxM>& x) noexcept {
+    for (std::size_t i = 0; i < m; ++i) {
+        Real acc = x[i];
+        for (std::size_t k = 0; k < i; ++k) acc -= l[i * m + k] * x[k];
+        x[i] = acc / l[i * m + i];
+    }
+    for (std::size_t ii = m; ii-- > 0;) {
+        Real acc = x[ii];
+        for (std::size_t k = ii + 1; k < m; ++k) acc -= l[k * m + ii] * x[k];
+        x[ii] = acc / l[ii * m + ii];
+    }
+}
+
+// S = H P H^T + R and the PH^T it is built from, both needed by the update.
+bool innovation_covariance(const Track& t, const std::array<Real, kMaxM * kN>& h,
+                           std::size_t m, const TrackerConfig& cfg,
+                           std::array<Real, kN * kMaxM>& pht,
+                           std::array<Real, kMaxM * kMaxM>& sm) noexcept {
     for (std::size_t i = 0; i < kN; ++i) {
-        for (std::size_t j = 0; j < 2; ++j) {
+        for (std::size_t j = 0; j < m; ++j) {
             Real acc = kZero;
             for (std::size_t k = 0; k < kN; ++k) {
                 acc += t.covariance[i * kN + k] * h[j * kN + k];
             }
-            pht[i * 2 + j] = acc;
+            pht[i * m + j] = acc;
         }
     }
-    s00 = kZero; s01 = kZero; s11 = kZero;
-    for (std::size_t k = 0; k < kN; ++k) {
-        s00 += h[k] * pht[k * 2];
-        s01 += h[k] * pht[k * 2 + 1];
-        s11 += h[kN + k] * pht[k * 2 + 1];
+    for (std::size_t i = 0; i < m; ++i) {
+        for (std::size_t j = 0; j < m; ++j) {
+            Real acc = kZero;
+            for (std::size_t k = 0; k < kN; ++k) acc += h[i * kN + k] * pht[k * m + j];
+            sm[i * m + j] = acc;
+        }
     }
-    s00 += cfg.range_sigma_m * cfg.range_sigma_m;
-    s11 += cfg.bearing_sigma_rad * cfg.bearing_sigma_rad;
+    sm[0] += cfg.range_sigma_m * cfg.range_sigma_m;
+    sm[m + 1] += cfg.bearing_sigma_rad * cfg.bearing_sigma_rad;
+    if (m == 3) sm[8] += cfg.range_rate_sigma_mps * cfg.range_rate_sigma_mps;
+    return true;
+}
 
-    det = s00 * s11 - s01 * s01;
-    return det > kZero;
+// Innovation vector, with the bearing wrapped.
+std::size_t innovation(const Track& t, const Measurement& z, Real r,
+                       std::array<Real, kMaxM>& y) noexcept {
+    y[0] = z.range_m - r;
+    y[1] = wrap_pi(z.bearing_rad - t.state.bearing_rad());
+    if (!z.has_range_rate) return 2;
+    y[2] = z.range_rate_mps - t.state.range_rate_mps();
+    return 3;
 }
 
 }  // namespace
@@ -76,6 +136,28 @@ Real chi2_gate_2dof(Real probability) noexcept {
     // The chi-square CDF with 2 dof is 1 - exp(-x/2), so it inverts in closed
     // form: no table, no approximation.
     return -kTwo * std::log(kOne - probability);
+}
+
+Real chi2_gate(Real probability, std::size_t dof) noexcept {
+    if (!(probability > kZero) || !(probability < kOne) || dof == 0) return kZero;
+    if (dof == 2) return chi2_gate_2dof(probability);
+    // No closed form for odd dof, so bisect on the CDF. The 3-dof CDF is
+    // erf(sqrt(x/2)) - sqrt(2x/pi) exp(-x/2); for 1 dof it is erf(sqrt(x/2)).
+    auto cdf = [dof](Real x) noexcept -> Real {
+        const Real a = std::erf(std::sqrt(x / kTwo));
+        if (dof == 1) return a;
+        if (dof == 3) {
+            return a - std::sqrt(kTwo * x / kPi) * std::exp(-x / kTwo);
+        }
+        return a;   // higher dof are not needed here
+    };
+    Real lo = kZero;
+    Real hi = static_cast<Real>(100);
+    for (int i = 0; i < 100; ++i) {
+        const Real mid = (lo + hi) / kTwo;
+        if (cdf(mid) < probability) lo = mid; else hi = mid;
+    }
+    return lo;
 }
 
 void track_predict(Track& track, Real dt, const TrackerConfig& cfg) noexcept {
@@ -127,20 +209,24 @@ Real track_nis(const Track& track, const Measurement& z,
     const Real r = track.state.range_m();
     if (!(r > kMinRange)) return kHugeNis;
 
-    std::array<Real, 8> h{};
-    jacobian(track.state, r, h);
+    std::array<Real, kMaxM * kN> h{};
+    const std::size_t m = jacobian(track.state, r, z.has_range_rate, h);
 
-    Real s00 = 0, s01 = 0, s11 = 0, det = 0;
-    if (!innovation_covariance(track, h, cfg, s00, s01, s11, det)) return kHugeNis;
+    std::array<Real, kN * kMaxM> pht{};
+    std::array<Real, kMaxM * kMaxM> sm{};
+    innovation_covariance(track, h, m, cfg, pht, sm);
 
-    const Real y0 = z.range_m - r;
-    const Real y1 = wrap_pi(z.bearing_rad - track.state.bearing_rad());
+    std::array<Real, kMaxM> y{};
+    innovation(track, z, r, y);
 
-    // y^T S^-1 y with S^-1 written out for the 2x2.
-    const Real inv00 = s11 / det;
-    const Real inv01 = -s01 / det;
-    const Real inv11 = s00 / det;
-    return y0 * y0 * inv00 + kTwo * y0 * y1 * inv01 + y1 * y1 * inv11;
+    std::array<Real, kMaxM * kMaxM> l = sm;
+    if (!small_cholesky(l, m)) return kHugeNis;
+    std::array<Real, kMaxM> x = y;
+    small_cholesky_solve(l, m, x);
+
+    Real d = kZero;
+    for (std::size_t i = 0; i < m; ++i) d += y[i] * x[i];
+    return (d >= kZero) ? d : kHugeNis;
 }
 
 bool track_update(Track& track, const Measurement& z, const TrackerConfig& cfg) noexcept {
@@ -148,46 +234,44 @@ bool track_update(Track& track, const Measurement& z, const TrackerConfig& cfg) 
     const Real r = track.state.range_m();
     if (!(r > kMinRange)) return false;
 
-    std::array<Real, 8> h{};
-    jacobian(track.state, r, h);
+    std::array<Real, kMaxM * kN> h{};
+    const std::size_t m = jacobian(track.state, r, z.has_range_rate, h);
 
-    Real s00 = 0, s01 = 0, s11 = 0, det = 0;
-    if (!innovation_covariance(track, h, cfg, s00, s01, s11, det)) return false;
+    std::array<Real, kN * kMaxM> pht{};
+    std::array<Real, kMaxM * kMaxM> sm{};
+    innovation_covariance(track, h, m, cfg, pht, sm);
 
-    const Real inv00 = s11 / det;
-    const Real inv01 = -s01 / det;
-    const Real inv11 = s00 / det;
+    std::array<Real, kMaxM * kMaxM> l = sm;
+    if (!small_cholesky(l, m)) return false;
 
-    // K = P H^T S^-1, 4x2.
-    Real pht[8];
+    // K = P H^T S^-1, obtained a column at a time by solving S k_i = (PH^T)_i.
+    Real k_gain[kN * kMaxM];
     for (std::size_t i = 0; i < kN; ++i) {
-        for (std::size_t j = 0; j < 2; ++j) {
-            Real acc = kZero;
-            for (std::size_t k = 0; k < kN; ++k) {
-                acc += track.covariance[i * kN + k] * h[j * kN + k];
-            }
-            pht[i * 2 + j] = acc;
-        }
-    }
-    Real k_gain[8];
-    for (std::size_t i = 0; i < kN; ++i) {
-        k_gain[i * 2]     = pht[i * 2] * inv00 + pht[i * 2 + 1] * inv01;
-        k_gain[i * 2 + 1] = pht[i * 2] * inv01 + pht[i * 2 + 1] * inv11;
+        std::array<Real, kMaxM> row{};
+        for (std::size_t j = 0; j < m; ++j) row[j] = pht[i * m + j];
+        small_cholesky_solve(l, m, row);
+        for (std::size_t j = 0; j < m; ++j) k_gain[i * m + j] = row[j];
     }
 
-    const Real y0 = z.range_m - r;
-    const Real y1 = wrap_pi(z.bearing_rad - track.state.bearing_rad());
+    std::array<Real, kMaxM> y{};
+    innovation(track, z, r, y);
 
-    track.state.x  += k_gain[0] * y0 + k_gain[1] * y1;
-    track.state.y  += k_gain[2] * y0 + k_gain[3] * y1;
-    track.state.vx += k_gain[4] * y0 + k_gain[5] * y1;
-    track.state.vy += k_gain[6] * y0 + k_gain[7] * y1;
+    Real dx[kN] = {kZero, kZero, kZero, kZero};
+    for (std::size_t i = 0; i < kN; ++i) {
+        for (std::size_t j = 0; j < m; ++j) dx[i] += k_gain[i * m + j] * y[j];
+    }
+    track.state.x  += dx[0];
+    track.state.y  += dx[1];
+    track.state.vx += dx[2];
+    track.state.vy += dx[3];
 
     // P = (I - K H) P
     Real kh[16];
     for (std::size_t i = 0; i < kN; ++i) {
         for (std::size_t j = 0; j < kN; ++j) {
-            kh[i * kN + j] = k_gain[i * 2] * h[j] + k_gain[i * 2 + 1] * h[kN + j];
+            Real acc = kZero;
+            for (std::size_t q = 0; q < m; ++q) acc += k_gain[i * m + q] * h[q * kN + j];
+            kh[i * kN + j] = acc;
         }
     }
     Real np[16];
@@ -210,6 +294,12 @@ bool track_update(Track& track, const Measurement& z, const TrackerConfig& cfg) 
     }
 
     track.last_update_s = z.time_s;
+    // Exponentially smoothed amplitude, for ghost recognition.
+    track.amplitude = (track.hits == 0)
+                    ? z.amplitude
+                    : static_cast<Real>(0.7) * track.amplitude
+                    + static_cast<Real>(0.3) * z.amplitude;
+    track.label = z.label;
     ++track.hits;
     track.misses = 0;
     return true;
@@ -235,6 +325,8 @@ void track_initiate(Track& track, const Measurement& z, const TrackerConfig& cfg
     track.covariance[15] = cfg.init_velocity_sigma_mps * cfg.init_velocity_sigma_mps;
 
     track.last_update_s = z.time_s;
+    track.amplitude = z.amplitude;
+    track.label = z.label;
     track.id = id;
     track.hits = 1;
     track.misses = 0;
@@ -254,28 +346,64 @@ std::size_t tracker_step(std::span<Track> tracks,
         if (dt > kZero) track_predict(t, dt, cfg);
     }
 
-    // --- 2. Greedy nearest-neighbour association ----------------------------
-    // At most 64 measurements are considered per step; beyond that the extras
-    // are treated as unassociated and may start tracks, which is the same
-    // outcome a global assignment would give for a cluttered scan.
+    // --- 2. Association, in global cost order -------------------------------
+    // Per-track greedy assigns in TRACK order, so the first track takes the
+    // measurement it likes best even when a later track wants it far more --
+    // which is exactly how two crossing targets swap identities. Ordering the
+    // whole (track, measurement) set by NIS and assigning best-first removes
+    // that particular failure.
+    //
+    // Still not the optimal assignment: a case exists where the globally
+    // cheapest pair forces two expensive ones and a Hungarian solve would do
+    // better. But it is O(T*M log(T*M)) with no allocation, and it fixes the
+    // crossing swap that per-track greedy produces routinely.
     constexpr std::size_t kMaxMeas = 64;
+    constexpr std::size_t kMaxPairs = 512;
     bool used[kMaxMeas] = {};
     const std::size_t n_meas = (measurements.size() < kMaxMeas) ? measurements.size() : kMaxMeas;
 
-    for (Track& t : tracks) {
-        if (!t.live()) continue;
-        std::size_t best = n_meas;
-        Real best_nis = cfg.gate_chi2;
-        for (std::size_t m = 0; m < n_meas; ++m) {
-            if (used[m]) continue;
-            const Real d = track_nis(t, measurements[m], cfg);
-            if (d < best_nis) { best_nis = d; best = m; }
+    struct Pair { Real cost; std::uint16_t track; std::uint16_t meas; };
+    Pair pairs[kMaxPairs];
+    std::size_t n_pairs = 0;
+
+    for (std::size_t ti = 0; ti < tracks.size() && n_pairs < kMaxPairs; ++ti) {
+        if (!tracks[ti].live()) continue;
+        for (std::size_t m = 0; m < n_meas && n_pairs < kMaxPairs; ++m) {
+            const Real d = track_nis(tracks[ti], measurements[m], cfg);
+            const Real gate = measurements[m].has_range_rate ? cfg.gate_chi2_3dof
+                                                             : cfg.gate_chi2_2dof;
+            if (d < gate) {
+                pairs[n_pairs++] = Pair{d, static_cast<std::uint16_t>(ti),
+                                        static_cast<std::uint16_t>(m)};
+            }
         }
-        if (best < n_meas && track_update(t, measurements[best], cfg)) {
-            used[best] = true;
-        } else {
-            ++t.misses;
+    }
+
+    // Insertion sort: n_pairs is small and bounded, and this needs no scratch.
+    for (std::size_t i = 1; i < n_pairs; ++i) {
+        const Pair key = pairs[i];
+        std::size_t j = i;
+        while (j > 0 && pairs[j - 1].cost > key.cost) {
+            pairs[j] = pairs[j - 1];
+            --j;
         }
+        pairs[j] = key;
+    }
+
+    bool track_taken[kMaxMeas] = {};
+    const std::size_t n_tracks = (tracks.size() < kMaxMeas) ? tracks.size() : kMaxMeas;
+    for (std::size_t i = 0; i < n_pairs; ++i) {
+        const std::size_t ti = pairs[i].track;
+        const std::size_t mi = pairs[i].meas;
+        if (ti >= n_tracks || track_taken[ti] || used[mi]) continue;
+        if (track_update(tracks[ti], measurements[mi], cfg)) {
+            track_taken[ti] = true;
+            used[mi] = true;
+        }
+    }
+    for (std::size_t ti = 0; ti < tracks.size(); ++ti) {
+        if (!tracks[ti].live()) continue;
+        if (ti >= n_tracks || !track_taken[ti]) ++tracks[ti].misses;
     }
 
     // --- 3. Confirmation and deletion ---------------------------------------
@@ -311,10 +439,61 @@ std::size_t tracker_step(std::span<Track> tracks,
     return live;
 }
 
+std::size_t suppress_template_ghosts(std::span<Track> tracks,
+                                     const GhostConfig& cfg) noexcept {
+    std::size_t killed = 0;
+    for (std::size_t i = 0; i < tracks.size(); ++i) {
+        Track& a = tracks[i];
+        if (!a.live() || a.hits < cfg.min_hits) continue;
+        for (std::size_t j = i + 1; j < tracks.size(); ++j) {
+            Track& b = tracks[j];
+            if (!b.live() || b.hits < cfg.min_hits) continue;
+
+            // THE safety check. A ghost is the same arrival seen through a
+            // different matched filter, so the labels must differ. Two real
+            // targets illuminated by one sonar return the same waveform and are
+            // therefore never paired -- without this, a formation in line
+            // astern would be deleted, and the test suite demonstrates that.
+            if (a.label == b.label) continue;
+
+            const Real dbear = std::fabs(wrap_pi(a.state.bearing_rad()
+                                               - b.state.bearing_rad()));
+            if (dbear > cfg.max_bearing_delta_rad) continue;
+
+            const Real drate = std::fabs(a.state.range_rate_mps()
+                                       - b.state.range_rate_mps());
+            if (drate > cfg.max_range_rate_delta_mps) continue;
+
+            const Real doffset = std::fabs(a.state.range_m() - b.state.range_m());
+            if (!(doffset > kZero) || doffset > cfg.max_range_offset_m) continue;
+
+            Track* weak = (a.amplitude < b.amplitude) ? &a : &b;
+            Track* strong = (weak == &a) ? &b : &a;
+            if (!(weak->amplitude > kZero) || !(strong->amplitude > kZero)) continue;
+            const Real ratio_db = static_cast<Real>(20)
+                                * std::log10(strong->amplitude / weak->amplitude);
+            if (ratio_db < cfg.min_amplitude_ratio_db) continue;
+
+            weak->status = TrackStatus::Free;
+            ++killed;
+            if (weak == &a) break;   // `a` is gone; move to the next i
+        }
+    }
+    return killed;
+}
+
 std::size_t count_tracks(std::span<const Track> tracks, TrackStatus status) noexcept {
     std::size_t n = 0;
     for (const Track& t : tracks) {
         if (t.status == status) ++n;
+    }
+    return n;
+}
+
+std::size_t count_established(std::span<const Track> tracks) noexcept {
+    std::size_t n = 0;
+    for (const Track& t : tracks) {
+        if (t.status == TrackStatus::Confirmed || t.status == TrackStatus::Coasting) ++n;
     }
     return n;
 }

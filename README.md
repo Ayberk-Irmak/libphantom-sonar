@@ -5,7 +5,7 @@ Zero dependencies, zero heap allocation, C++20.
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 ![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)
-![Status](https://img.shields.io/badge/status-v0.9%20detections%20to%20tracks-orange.svg)
+![Status](https://img.shields.io/badge/status-v0.10%20fusion-orange.svg)
 ![Validated](https://img.shields.io/badge/validated-vs%20Bellhop-brightgreen.svg)
 
 ![Munk deep sound channel propagation](data/munk_rays.png)
@@ -166,7 +166,57 @@ one target + its ghost           ->  2 confirmed tracks
 ```
 
 Tracking kills false alarms, which do not repeat. Ghosts repeat. The test suite
-asserts the honest outcome so the correction cannot quietly rot.
+asserts the honest outcome so the correction cannot quietly rot. v0.10 kills the
+ghosts by a different mechanism — see below.
+
+## v0.10 — fusing what was already measured
+
+Four quantities were being produced by one subsystem and thrown away at the
+boundary of the next. No new physics; just joining them up.
+
+**A ghost is recognised by its origin, not its behaviour.** It is the same
+arrival seen through a different matched filter: shared bearing, fixed range
+offset, weaker, and a **different waveform label**. That last field is the whole
+safety argument, and the test that proves it changes *only* that field:
+
+```
+line-astern formation, same waveform  ->  2 tracks (kept)
+same geometry, different waveforms    ->  1 track  (suppressed)
+```
+
+Two real targets lit by one sonar return the same waveform. Without the label
+check the formation is silently deleted — and deleting a real target is a far
+worse failure than carrying a ghost.
+
+**The Doppler bank's closing rate now reaches the filter**, with the chi-square
+gate following the measurement dimension. What it is worth, including where it
+stops being worth anything:
+
+| scans | position only | with range rate | ratio |
+|---|---|---|---|
+| 3 | 4.213 m/s | **1.220 m/s** | 3.45× |
+| 6 | 2.069 m/s | **0.649 m/s** | 3.19× |
+| 20 | 0.365 m/s | 0.368 m/s | 0.99× |
+
+The gain vanishes by twenty scans, because by then the filter's own estimate
+already beats the measurement. That row is in the table rather than cropped out
+of it. Related trap, also tested: a Doppler bank that fails to resolve a shift
+reports 0 m/s, which is **not** a measurement that the target is stationary —
+treating it as one reads a true 8.00 m/s closure as 5.686.
+
+**Crossing targets keep their identities.** Association still gates on NIS, but
+assigns over a global cost ordering instead of measurement arrival order:
+
+```
+before crossing: left=1 right=2
+after  crossing: left=2 right=1
+```
+
+**MVDR survives coherent multipath** — one arrival by two paths, which is
+exactly what this library's own ray tracer produces. Forward-backward spatial
+smoothing turns 4 spurious peaks into 2 correct ones at ±6°. The cost is
+aperture: resolution falls from 7.16° to 11.46°, and a test asserts that it
+does.
 
 **A 12 kHz chirp, steered 37× beyond where phase steering dies.** v0.7 measured
 the limit and this release fixes it: a phase shift that is wrong across a band
@@ -451,14 +501,17 @@ tells you the code did not change. These tell you it is right:
 | Wideband beam vs the closed-form array factor | 5e-3 worst |
 | Shading sidelobes vs published window values | −13.3 / −31.5 / −42.7 / −58.1 dB |
 | Tracker NIS vs its chi-square distribution | mean 1.951 vs 2, gates 95.0/99.0% |
+| Fused 3-dof NIS vs its chi-square distribution | mean 2.998 vs 3, gates 94.7/98.9% |
+| 3-dof gate quantiles, bisected vs published | 7.815 / 11.345 |
+| Smoothed MVDR bearings on coherent sources | −6.00° / +6.00° (truth ±6) |
 | FFT vs a direct O(N²) DFT sharing no code | 2.3e-16 relative |
 | FFT correlation vs direct O(N·L) correlation | 1.1e-15 relative |
 | Matched filter peak, width, coherent gain | `A·E/2`, `1/B`, `L/2` — all matched |
 | Waveform classification, 4 types at −4.4 dB SNR | 100/100 |
 
-41008 checks. Clean under GCC 15 and Clang 21 with `-Wconversion -Wsign-conversion
+41044 checks. Clean under GCC 15 and Clang 21 with `-Wconversion -Wsign-conversion
 -Wold-style-cast -Wdouble-promotion -Werror`, and under ASan + UBSan. Passes in
-both `double` and `float` builds. Zero allocation is proven by `nm` over the
+all four compiler × precision configurations. Zero allocation is proven by `nm` over the
 built archive, not asserted: the library references only libm and `memset`.
 
 ## Measured performance

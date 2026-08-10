@@ -287,6 +287,49 @@ std::size_t mvdr_power(const LineArray& array, Real lambda_m,
     return n_angles;
 }
 
+bool spatial_smooth(std::span<const Complex> cov, std::size_t n,
+                    std::size_t subarray, std::span<Complex> out) noexcept {
+    if (n < 2 || subarray < 1 || subarray > n) return false;
+    if (cov.size() < n * n || out.size() < subarray * subarray) return false;
+
+    const std::size_t k = n - subarray + 1;   // number of subarrays
+    for (std::size_t i = 0; i < subarray * subarray; ++i) out[i] = Complex(kZero, kZero);
+
+    for (std::size_t s = 0; s < k; ++s) {
+        for (std::size_t i = 0; i < subarray; ++i) {
+            for (std::size_t j = 0; j < subarray; ++j) {
+                out[i * subarray + j] += cov[(i + s) * n + (j + s)];
+            }
+        }
+    }
+
+    // Backward: J conj(R) J, with J the exchange matrix, so
+    //     R_fb[i][j] = R_f[i][j] + conj(R_f[L-1-i][L-1-j])
+    // and since R_f is Hermitian that conjugate is just R_f[L-1-j][L-1-i].
+    //
+    // Written that way each entry pairs with exactly one other, (i,j) with
+    // (L-1-j, L-1-i), and BOTH receive the same sum -- forward-backward
+    // smoothing produces a persymmetric matrix, which is the check that the
+    // indices are the right way round. Handling the pair together is also what
+    // makes the in-place update safe: the naive version overwrites entries it
+    // has yet to read, and the result is a covariance that still looks
+    // plausible and puts every bearing in the wrong place.
+    for (std::size_t i = 0; i < subarray; ++i) {
+        for (std::size_t j = 0; j < subarray; ++j) {
+            const std::size_t idx = i * subarray + j;
+            const std::size_t pidx = (subarray - 1 - j) * subarray + (subarray - 1 - i);
+            if (idx > pidx) continue;
+            const Complex sum = out[idx] + out[pidx];
+            out[idx] = sum;
+            out[pidx] = sum;
+        }
+    }
+
+    const Real inv = kOne / static_cast<Real>(2 * k);
+    for (std::size_t i = 0; i < subarray * subarray; ++i) out[i] *= inv;
+    return true;
+}
+
 Real conventional_resolution_limit_rad(const LineArray& array, Real lambda_m,
                                        Real bearing_rad) noexcept {
     if (!array.valid() || !(lambda_m > kZero)) return kZero;

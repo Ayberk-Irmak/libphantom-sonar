@@ -1181,10 +1181,13 @@ Measured: one target plus its ghost gives **two** confirmed tracks. The test
 asserts that outcome so the correction cannot quietly rot.
 
 Suppressing ghosts needs the fixed offset and amplitude ratio to be recognised
-as a template artefact — a different mechanism entirely, and one this library
-does not implement.
+as a template artefact — a different mechanism entirely. §16.2 implements it.
 
 ### 15.5 Association
+
+*(Superseded by §16.3, which replaced greedy association with a global cost
+ordering. Retained because the reasoning is still the reason a global ordering
+was needed.)*
 
 Greedy nearest-neighbour on the NIS, gated at `chi2`. Not optimal: a global
 assignment does better when two targets cross. But it is
@@ -1194,3 +1197,175 @@ during a crossing — is well understood rather than surprising.
 `(I − KH)P` is symmetrised after each update. It is symmetric in exact
 arithmetic and drifts out of it in floating point; an asymmetric covariance
 eventually goes indefinite and the filter diverges with no warning at all.
+
+
+## 16. Fusing what is already measured
+
+Every quantity in this section was already being produced by an earlier stage
+and then discarded at the boundary. Nothing new is measured; four existing
+outputs are simply joined to the consumers that could use them.
+
+### 16.1 Range rate as a third measurement
+
+The Doppler bank of §8 estimates a closing rate for every detection, and §15's
+filter inferred velocity from position history alone while that estimate sat
+unused in the `PulseDescriptor`. Fusing it extends the measurement to
+`z = [r, theta, rdot]` with
+
+```
+rdot = (x vx + y vy) / r
+```
+
+and a third Jacobian row obtained by differentiating it:
+
+```
+d(rdot)/dx  = -vx/r + (x vx + y vy) x / r^3
+d(rdot)/dy  = -vy/r + (x vx + y vy) y / r^3
+d(rdot)/dvx = -x/r
+d(rdot)/dvy = -y/r
+```
+
+The sign convention is the bank's: **positive closing**, hence the leading
+minus. Note that unlike the range and bearing rows, this one depends on the
+velocity components — a range rate is the only measurement in the set that
+observes the velocity state *directly* rather than through its effect on
+successive positions.
+
+**The gate must follow the dimension.** A 2-dof measurement and a 3-dof one at
+the same threshold are different gate probabilities, so `TrackerConfig` carries
+both and the filter picks by `has_range_rate`. The 3-dof quantile has no
+closed form, so it is bisected on the exact CDF
+
+```
+F(x; 3) = erf(sqrt(x/2)) - sqrt(2x/pi) exp(-x/2)
+```
+
+giving **7.815 at 95%** and **11.345 at 99%** — the textbook values to three
+decimals, computed rather than tabulated.
+
+Consistency is preserved: over 1980 fused updates the mean NIS is **2.998**
+against a theoretical 3, with 94.7% under the 95% gate and 98.9% under the 99%.
+
+**What it is worth, honestly.** Radial velocity error, the only component a
+range rate observes:
+
+| scans | position only | with range rate | ratio |
+|---|---|---|---|
+| 3 | 4.213 m/s | **1.220 m/s** | 3.45× |
+| 6 | 2.069 m/s | **0.649 m/s** | 3.19× |
+| 20 | 0.365 m/s | 0.368 m/s | 0.99× |
+
+The gain is large early and vanishes by twenty scans. That is not a defect: by
+then the filter's own estimate (0.365 m/s) is already sharper than the σ = 2 m/s
+measurement, and a measurement helps exactly as long as it beats the estimate
+you already have. Where it matters is the first few scans of a new contact —
+which is when a decision usually has to be made.
+
+**An unresolved bin is not a measurement of zero.** A Doppler bank that fails to
+resolve a shift reports 0 m/s, which is a completely different statement from
+"the target is stationary". Feeding it in pins the track's radial velocity to
+zero. Hence the separate `has_range_rate` flag, and the measurement:
+
+```
+truth closing                8.00 m/s
+zero taken as a measurement  5.686 m/s   (28% low)
+flag left clear              9.163 m/s
+```
+
+### 16.2 Recognising a cross-template ghost
+
+§15.4 established that time consistency cannot suppress these, because a ghost
+is *as consistent as the target*. What distinguishes it is not its kinematics
+but its **origin**: it is the same arrival seen through a different matched
+filter. So it
+
+* shares the target's bearing and bearing rate (same arrival),
+* sits at a fixed range offset (the template cross-correlation lag),
+* is weaker (a mismatched filter loses processing gain), and
+* carries a **different waveform label**.
+
+A pair is suppressed only when all four hold. **The label check is the whole
+safety argument.** Two real targets illuminated by one sonar return the *same*
+waveform, so they share a label and are never paired — which is what saves a
+line-astern formation, the geometry that is otherwise indistinguishable from a
+ghost pair. The test suite demonstrates exactly that:
+
+```
+line-astern formation, same waveform -> 2 tracks (kept)
+same geometry, different waveforms   -> 1 track (suppressed)
+```
+
+The two runs differ *only* in the label. Without that check the first would be
+silently deleted, and deleting a real target is a far worse failure than
+carrying a ghost.
+
+The bearing tolerance is set from what the array delivers, not from the
+geometry. Two tracks on one *true* bearing estimate it independently, so with
+1° measurements they routinely differ by 1.7°; the default is 3°. Loosening it
+is safe precisely because the label, not the bearing, is doing the separating.
+
+### 16.3 Global-cost-ordered association
+
+Greedy association processes measurements in arrival order and lets the first
+one take its best track, which is why two crossing targets swap: at the crossing
+the wrong measurement gets first pick.
+
+The fix needs no assignment algorithm. Build every gating `(track, measurement)`
+pair with its NIS, sort by cost, and assign best-first, skipping any pair whose
+track or measurement is already taken. This is not optimal in the Hungarian
+sense — it is still greedy, but greedy over the *global* cost ordering rather
+than over arrival order, and that is what the crossing case actually needs. Cost
+is `O(TM log TM)` with a fixed-size array and an insertion sort, no allocation.
+
+Measured on two targets crossing at 8 m/s:
+
+```
+before crossing: left=1 right=2
+after  crossing: left=2 right=1
+```
+
+The identities survive. Note also what did *not* need changing: the gate. A
+swap is not a gating failure — both measurements gate perfectly well against
+both tracks near the crossing, which is exactly why the choice among them has to
+be made globally.
+
+### 16.4 Forward-backward spatial smoothing
+
+MVDR (§14) fails on **coherent** sources, and the multipath this library
+produces in §10 is precisely that: one arrival reaching the array by two paths,
+perfectly correlated. The covariance is then rank-deficient in a way diagonal
+loading cannot repair, and the adaptive beamformer nulls the target along with
+its own echo.
+
+The remedy averages the covariances of overlapping subarrays, which randomises
+the relative phase between the coherent pair and restores rank. Forward-backward
+adds the exchange-reversed conjugate, doubling the effective snapshot count for
+free on a uniform line array:
+
+```
+R_smooth = (1 / 2K) sum_k [ R_k + J conj(R_k) J ]
+```
+
+with `J` the exchange matrix and `K = N - L + 1` subarrays of `L` elements.
+Elementwise, using the Hermitian symmetry of `R_k`,
+
+```
+R_fb[i][j] = R_f[i][j] + R_f[L-1-j][L-1-i]
+```
+
+which pairs each entry with exactly one other and gives both the same value.
+That the result is **persymmetric** is the check that the indices are the right
+way round; getting them transposed produces a matrix that still looks like a
+covariance and puts every bearing in the wrong place.
+
+Measured on two coherent arrivals at ±6°:
+
+| | peaks found |
+|---|---|
+| plain MVDR, 16 elements | 4 (spurious) |
+| forward-backward, 10-element subarrays | **2, at −6.00° and +6.00°** |
+
+**The cost is aperture, and it is not small.** An `N`-element array smoothed
+with subarrays of `L` has the resolution of an `L`-element array: 7.16° falls
+to 11.46° in the case above. Resolving `P` coherent sources needs `L > P`, so
+the caller must choose `L` — the library will not choose it for them.

@@ -131,6 +131,29 @@ std::size_t mvdr_power(const LineArray& array, Real lambda_m,
                        std::span<Complex> work,
                        std::span<Real> out_power) noexcept;
 
+// Forward-backward spatial smoothing.
+//
+// MVDR fails on COHERENT sources -- and the multipath this same library
+// produces in v0.4 is exactly that: one arrival reaching the array by two
+// paths, perfectly correlated. Two coherent arrivals make the covariance
+// rank-deficient in a way loading cannot fix, and the adaptive beamformer nulls
+// the target along with the interferer.
+//
+// The standard remedy: average the covariances of overlapping subarrays, which
+// randomises the relative phase between the coherent pair and restores rank.
+// Forward-backward adds the exchange-reversed conjugate, doubling the effective
+// snapshot count for free on a uniform line array.
+//
+//   R_smooth = (1 / 2K) sum_k [ R_k + J conj(R_k) J ]
+//
+// The cost is aperture: an N-element array smoothed with subarrays of L
+// elements has the resolution of an L-element one. Resolving P coherent sources
+// needs L > P, so the trade is real and the caller must make it.
+//
+// `cov` is N*N, `out` is L*L. Returns false on bad sizes.
+bool spatial_smooth(std::span<const Complex> cov, std::size_t n,
+                    std::size_t subarray, std::span<Complex> out) noexcept;
+
 // Angular separation below which conventional beamforming cannot resolve two
 // equal sources, whatever the SNR: the Rayleigh criterion, one null-to-peak
 // spacing. MVDR is not bound by it, which is the whole point of it.

@@ -123,7 +123,7 @@ own waveforms. This closes that, and joins the array to the analyser.
   aperture limit is 7.16, by Cholesky rather than an explicit inverse
 - Diagonal loading verified as necessary rather than decorative
 
-## v0.9 — Tracking ✅ *(current)*
+## v0.9 — Tracking ✅
 
 - An EKF over a constant-velocity target: Cartesian dynamics, polar
   measurements, with the nonlinearity confined to the measurement Jacobian
@@ -138,23 +138,41 @@ own waveforms. This closes that, and joins the array to the analyser.
   the honest outcome. Ghosts repeat; false alarms do not, and only the latter
   are what time consistency removes.
 
-## v0.10 — Fusing what is already measured
+## v0.10 — Fusing what is already measured ✅ *(current)*
 
-Several quantities are measured twice by different subsystems and never
-compared. Joining them is cheaper than any new physics and worth more.
+Several quantities were measured by one subsystem and discarded at the boundary
+of the next. Joining them is cheaper than any new physics and worth more.
 
-- [ ] Feed the Doppler bank's closing rate into the tracker as a third
-      measurement. It is measured directly and currently thrown away.
-- [ ] Ghost suppression by template-artefact recognition: a fixed offset and
-      amplitude ratio matching a known cross-correlation is not a target.
-- [ ] Global nearest-neighbour or JPDA association, so crossing targets do not
-      swap tracks.
-- [ ] Spatial smoothing, so MVDR survives the coherent multipath v0.4 produces.
-- [ ] An interacting-multiple-model filter, so a manoeuvre is modelled rather
-      than absorbed as process noise.
+- [x] **The Doppler bank's closing rate feeds the tracker** as a third
+      measurement, with the chi-square gate following the dimension (3-dof
+      quantiles bisected on the exact CDF: 7.815 / 11.345). Consistency holds,
+      mean NIS 2.998 against a theoretical 3. Radial-velocity error improves
+      **3.45×** at 3 scans, 3.19× at 6 — and **0.99× at 20**, which is reported
+      rather than buried: by then the filter's own estimate already beats the
+      measurement. An unresolved bin is explicitly *not* a measurement of zero.
+- [x] **Ghost suppression by template-artefact recognition**, delivering what
+      v0.8 wrongly expected of tracking. The distinguishing feature is origin,
+      not kinematics: shared bearing, fixed offset, weaker, and a **different
+      waveform label**. The label check is the safety argument — a line-astern
+      formation with the same waveform is kept, the same geometry with different
+      waveforms is suppressed, and the two runs differ only in that field.
+- [x] **Global-cost-ordered association.** Every gating pair is built, sorted by
+      NIS and assigned best-first. Crossing targets keep their identities where
+      greedy-by-arrival-order swapped them. Not Hungarian-optimal, and said so.
+- [x] **Forward-backward spatial smoothing**, so MVDR survives the coherent
+      multipath v0.4 produces. Two coherent arrivals at ±6° go from 4 spurious
+      peaks to 2 correct ones. The cost is aperture — resolution falls from
+      7.16° to 11.46° — and a test asserts that it does.
+- [ ] *Deferred:* an interacting-multiple-model filter, so a manoeuvre is
+      modelled rather than absorbed as process noise. Moved to v0.11; it is new
+      estimation machinery rather than a fusion of what already exists, which is
+      what this release was about.
 
-## v0.11 — Real data
+## v0.11 — Real data and manoeuvre
 
+- [ ] **An interacting-multiple-model filter** (deferred from v0.10). Constant
+      velocity absorbs a hard turn as process noise or gates it out; an IMM over
+      CV and coordinated-turn models does not.
 - [x] **Bellhop cross-validation.** Done in v0.1.1. Both codes read the same
       `.env`; Bellhop converges toward the analytic arc solution as its step
       shrinks. See `docs/validation.md §2`.

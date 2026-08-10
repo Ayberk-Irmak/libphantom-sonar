@@ -2,7 +2,7 @@
 cmake_minimum_required(VERSION 3.20)
 
 project(phantom-sonar
-        VERSION 0.9.0
+        VERSION 0.10.0
         DESCRIPTION "Real-time ocean acoustics, ray tracing and sonar pulse analysis"
         LANGUAGES CXX)
 
@@ -14,6 +14,24 @@ option(PHANTOM_BUILD_EXAMPLES "Build the example programs"                ON)
 option(PHANTOM_BUILD_BENCH    "Build the hot-path benchmark"              ON)
 option(PHANTOM_BUILD_TOOLS    "Build the Bellhop comparison tool"         ON)
 option(PHANTOM_REAL_FLOAT     "Use float instead of double for Real"      OFF)
+
+# Reject near-miss option names rather than ignoring them.
+#
+# CMake accepts any -D silently, so a mistyped -DPHANTOM_USE_FLOAT=ON configures
+# a perfectly ordinary double build and every test passes. That is worse than a
+# failure: it produces a "verified at float precision" claim from a run that
+# never used float. This happened during v0.10 development.
+foreach(_typo PHANTOM_USE_FLOAT PHANTOM_FLOAT PHANTOM_SINGLE_PRECISION
+              PHANTOM_USE_DOUBLE PHANTOM_TESTS PHANTOM_EXAMPLES
+              PHANTOM_BENCH PHANTOM_SANITIZERS PHANTOM_WARNINGS_AS_ERRORS)
+    if(DEFINED ${_typo})
+        message(FATAL_ERROR
+            "Unknown option ${_typo}. CMake would have ignored it and configured "
+            "a default build. Did you mean one of: PHANTOM_REAL_FLOAT, "
+            "PHANTOM_BUILD_TESTS, PHANTOM_BUILD_EXAMPLES, PHANTOM_BUILD_BENCH, "
+            "PHANTOM_SANITIZE, PHANTOM_WERROR?")
+    endif()
+endforeach()
 option(PHANTOM_WERROR         "Treat warnings as errors"                  OFF)
 option(PHANTOM_SANITIZE       "Build with ASan + UBSan (tests only)"      OFF)
 
