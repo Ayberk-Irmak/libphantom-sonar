@@ -1021,13 +1021,73 @@ its own: it detected turns by a sign change across index `i`, and because the
 turn itself sits at exactly zero — and zero is not `> 0` — the point *before* the
 turn also looked like a reversal.
 
-## 16. Build and runtime hygiene ✅
+## 16. Turn-rate estimation and the IMM tracker — verified ✅
+
+### A bracket does not degrade gracefully
+
+Models bracketed at 3 °/s, against a five-state filter that estimates the rate:
+
+| truth | IMM (bracketed) | CTRV (estimated) |
+|---|---|---|
+| 2 °/s | 1.27 °/s | 1.02 °/s |
+| 5 °/s | 2.62 °/s | **4.99 °/s** |
+| 8 °/s | 1.82 °/s | **5.64 °/s** |
+
+The 8 °/s row is the interesting one: the IMM reports *less* turn than at 5 °/s.
+Once the truth leaves the bracket the ±ω models fit so badly that probability
+drifts back to constant velocity and the blend collapses toward zero.
+
+### Zero process noise on omega: confidently wrong
+
+Target straight for 30 scans, then turning at 5.00 °/s:
+
+| `q_w` | reported σ | estimate |
+|---|---|---|
+| **0** | **0.11 °/s** | **2.08 °/s** |
+| 0.005 | 0.91 °/s | 4.97 °/s |
+| 0.01 (default) | 1.54 °/s | 4.90 °/s |
+| 0.02 | 2.67 °/s | 4.89 °/s |
+
+With no random walk the covariance shrinks, the gain on the fifth state dies,
+and the filter reports the **smallest uncertainty about the most wrong answer**.
+This is the failure mode a test suite exists for: everything about the output
+looks healthy.
+
+The default was 0.02 when the filter was first written and was lowered to 0.01
+on this measurement.
+
+### What the fifth state costs
+
+Straight target, 12 runs, against a plain CV EKF: **36.28 m vs 35.74 m** —
+a 1.02× penalty. An extra state costs almost nothing when the measurement never
+moves it.
+
+### The zero-turn limit, again
+
+Same 0/0 as §13's IMM, but now appearing in the **Jacobian** as well as the
+transition, and both must switch to the series at the same threshold. Converges
+as 8.322e-N with no jump at the crossover; in `float` it floors at the
+precision limit and the test is precision-aware.
+
+### The tracker
+
+`imm_tracker_step()`, gating on the combined estimate:
+
+```
+two targets turning in opposite directions, 40 scans -> 2 established tracks
+  each detects its own manoeuvre, signs opposite and cancelling
+367 false alarms over 200 scans                      -> 0 established tracks
+```
+
+M-of-N confirmation survives the swap from a single filter to a mixture.
+
+## 17. Build and runtime hygiene ✅
 
 | Configuration | Result |
 |---|---|
 | GCC 15.3, `-Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion -Wold-style-cast -Wcast-qual -Wdouble-promotion -Werror` | clean |
 | Clang 21.1, same set | clean |
-| AddressSanitizer + UndefinedBehaviorSanitizer | clean, 43259 checks |
+| AddressSanitizer + UndefinedBehaviorSanitizer | clean, 43287 checks |
 | `Real = float` (`-DPHANTOM_REAL_FLOAT=ON`) | passes, all four compiler × precision configurations |
 | Heap allocations during execution | **zero** — proven by `nm` over the built archive: the library references only libm and `memset` |
 
@@ -1060,7 +1120,7 @@ layers:
 acceptable if you are differencing travel times for ranging. Use `double` unless
 your FPU forces otherwise.
 
-## 17. Performance (measured, not claimed)
+## 18. Performance (measured, not claimed)
 
 13th Gen Intel Core i7-13620H, `-O3`, single thread:
 
@@ -1100,7 +1160,7 @@ actually constrains a control loop, and measures **52 ns**. Re-run
 guarantee; these numbers are not a substitute for WCET analysis on the target
 silicon.
 
-## 18. Self-consistent but NOT independently verified ⚠️
+## 19. Self-consistent but NOT independently verified ⚠️
 
 - **Chapman-Harris surface backscatter coefficients.** The formula is written
   out in the header so a reader can check it, and its behaviour is verified
@@ -1121,7 +1181,7 @@ silicon.
 - **Real measured T/S profiles.** Everything so far uses analytic profiles
   (Munk, linear, isovelocity). Feeding World Ocean Atlas / Argo data is v0.2.
 
-## 19. Known limitations — not bugs, scope ⚠️
+## 20. Known limitations — not bugs, scope ⚠️
 
 - **Shadow fraction depends on ray density.** Gaps between adjacent rays read as
   shadow. Measured convergence for the 100 km Munk case on a 500×250 grid:
@@ -1151,17 +1211,18 @@ silicon.
   frequency-dependent.
 - **2-D (range–depth) only.** No azimuthal coupling or out-of-plane refraction.
 
-## 20. Not implemented in v0.11
+## 21. Not implemented in v0.12
 
 `BioMimeticCommEngine` is not in this release. See `docs/roadmap.md`.
 
 Known gaps within what *is* shipped:
 
-- **The IMM is not wired into `tracker_step()`.** The filter is implemented and
-  verified on its own; association, gating and track management still run the
-  single-model EKF. Joining them is v0.12.
-- **Fixed turn rates.** The IMM brackets a manoeuvre with ±ω rather than
-  estimating ω, so a target turning harder than ω saturates the estimate.
+- **CTRV has no tracker of its own.** `imm_tracker_step()` exists; the
+  five-state filter is single-target, and multi-target CTRV tracking is not
+  implemented.
+- **No IMM over CTRV models.** The two approaches are separate; combining them
+  (an IMM whose models each estimate their own turn rate) is the standard next
+  step and is not done.
 - **Profiles are a climatology**, not casts: no eddy, internal wave or diurnal
   layer survives a decadal 1° average.
 - **Association is greedy over a global cost ordering**, not a Hungarian
@@ -1182,7 +1243,7 @@ Known gaps within what *is* shipped:
 ```bash
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
-./build/phantom_tests          # 43259 checks
+./build/phantom_tests          # 43287 checks
 ./build/phantom_bench          # timing table above
 ./build/munk_simulation data   # CSV + console report
 ./build/ping_intercept data    # streaming ping detection demo

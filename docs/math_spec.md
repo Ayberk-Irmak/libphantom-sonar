@@ -1578,3 +1578,113 @@ rate recovers the direction correctly (truth ±3 °/s → estimate ±2.0…2.3 �
 That estimate is *not* a measurement of turn rate. With models at 0 and ±ω it
 can only return a value in [−ω, +ω], and a target turning harder saturates it.
 Read it as "which way, and roughly how hard".
+
+
+## 19. Estimating the turn rate, and the IMM in the tracker
+
+### 19.1 Why bracketing is not enough
+
+§18's IMM reports a probability-weighted blend of model turn rates, so its
+estimate is confined to `[-ω, +ω]` by construction. Against models bracketed at
+3 °/s:
+
+| truth | IMM (bracketed) | CTRV (estimated) |
+|---|---|---|
+| 2 °/s | 1.27 °/s | 1.02 °/s |
+| 5 °/s | 2.62 °/s | **4.99 °/s** |
+| 8 °/s | 1.82 °/s | **5.64 °/s** |
+
+Note the 8 °/s row: the IMM reports *less* turn than at 5 °/s. That is not a
+bug — the measurement fits the ±3 °/s models so badly that probability drifts
+back towards the constant-velocity model, and the blend collapses toward zero.
+A bracket does not degrade gracefully once the truth leaves it.
+
+### 19.2 The fifth state
+
+```
+x = [ x, y, vx, vy, omega ]
+```
+
+with the coordinated-turn transition of §18 applied to the first four, and
+`omega` a random walk. The transition is now **nonlinear** — `omega` multiplies
+the velocity terms — so the covariance must go through a Jacobian:
+
+```
+d(x')/d(omega) = vx d/dw[sin(wT)/w] - vy d/dw[(1-cos wT)/w]
+d(y')/d(omega) = vx d/dw[(1-cos wT)/w] + vy d/dw[sin(wT)/w]
+d(vx')/d(omega) = -T sin(wT) vx - T cos(wT) vy
+d(vy')/d(omega) =  T cos(wT) vx - T sin(wT) vy
+
+d/dw[ sin(wT)/w ]    = (T cos(wT) w - sin(wT)) / w^2      ->  -w T^3/3
+d/dw[ (1-cos wT)/w ] = (T sin(wT) w - (1-cos wT)) / w^2   ->   T^2/2
+```
+
+with the limits as `w -> 0` on the right. Both the transition and its Jacobian
+contain the same 0/0, and they must switch to the series at the **same**
+threshold: a state and a covariance that switch at different points describe
+different filters. The implementation computes all six quantities in one place
+for that reason.
+
+The measurement Jacobian gains a fifth column of **zeros**. Range, bearing and
+range rate do not depend on `omega` at all — it is observed only through its
+effect on where the target is predicted to be, which is why several scans of
+turning are needed before the estimate is worth anything.
+
+### 19.3 The knob that decides whether omega can be learned
+
+The random walk on `omega` is the one parameter with no counterpart in a
+constant-velocity filter, and **setting it to zero fails in the way hardest to
+notice**. Target flies straight for 30 scans, then turns at 5.00 °/s:
+
+| `q_w` | reported σ | estimate |
+|---|---|---|
+| 0 | **0.11 °/s** | **2.08 °/s** |
+| 0.005 | 0.91 °/s | 4.97 °/s |
+| 0.01 (default) | 1.54 °/s | 4.90 °/s |
+| 0.02 | 2.67 °/s | 4.89 °/s |
+
+With `q_w = 0` the covariance shrinks monotonically, the Kalman gain on the
+fifth state goes to nothing, and the filter can no longer follow a change. It
+then reports the *smallest* uncertainty of the four about the *most wrong*
+answer. Confident and wrong is a worse failure than uncertain and wrong, because
+nothing downstream can tell.
+
+The reported σ settling to a steady state rather than collapsing is therefore
+correct, not a defect: `omega` can change at any moment, and a filter that stops
+allowing for that has stopped being a tracker.
+
+### 19.4 What the fifth state costs
+
+On a straight target, against a plain CV EKF over 12 runs: **36.28 m against
+35.74 m**, a 1.02× penalty. Cheaper than expected — the extra state costs
+almost nothing when there is nothing to estimate, because the measurement
+simply never moves it.
+
+### 19.5 Choosing between them
+
+They are not ordered.
+
+* **IMM** — reacts faster when a manoeuvre *starts*, because a model that
+  already fits is waiting to take over. Cannot report a rate outside its
+  bracket. Robust: no model can diverge, only lose probability.
+* **CTRV** — measures the rate, with no ceiling. Slower to respond, and carries
+  a nonlinearity that an IMM does not.
+
+CTRV *measures* a manoeuvre; an IMM *reacts* to one.
+
+### 19.6 The IMM in the tracker
+
+`imm_tracker_step()` is the IMM counterpart of `tracker_step()`, with the same
+global-cost-ordered association and the same M-of-N management. One decision
+matters: **gating is on the combined estimate**, not per-model.
+
+A per-model gate would let the worst-fitting model veto a measurement the
+mixture accepts happily — and during a manoeuvre that is every model but one.
+The mixture's covariance already carries the spread between models (§18.1), so
+it widens exactly when the models disagree, which is when the gate should be
+generous. A per-model gate throws that property away.
+
+Measured: two targets turning in opposite directions from scan 15 hold two
+established tracks through 40 scans, each detecting its own manoeuvre with the
+correct sign. And 367 false alarms over 200 scans produce **zero** established
+tracks, so M-of-N confirmation survives the swap to a mixture.

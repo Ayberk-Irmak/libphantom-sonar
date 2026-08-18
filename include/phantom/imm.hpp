@@ -30,9 +30,9 @@
 // trade, and it is why the turn-rate estimate this header exposes is a
 // probability-weighted blend of the model rates rather than a measurement.
 //
-// SCOPE, stated plainly: this is the filter, verified on its own. It is not yet
-// wired into tracker_step() -- association, gating and track management still
-// run the single-model EKF. Joining them is v0.12.
+// v0.12 wires this into a full tracker: imm_tracker_step() below is the IMM
+// counterpart of tracker_step(), with the same global-cost-ordered association
+// and the same M-of-N management, gating on the COMBINED estimate.
 #ifndef PHANTOM_IMM_HPP
 #define PHANTOM_IMM_HPP
 
@@ -40,6 +40,7 @@
 #include "phantom/types.hpp"
 
 #include <array>
+#include <span>
 
 namespace phantom {
 
@@ -80,16 +81,25 @@ struct ImmTrack {
     std::array<Real, kImmModels * 16> model_cov{};
     std::array<Real, kImmModels> model_prob{};
 
+    // Lifecycle, mirroring Track so the two trackers manage tracks alike.
     Real last_update_s = 0;
+    Real amplitude = 0;
+    std::uint16_t label = 0;
+    std::uint32_t id = 0;
     std::uint32_t hits = 0;
-    bool live = false;
+    std::uint32_t misses = 0;
+    std::uint32_t age = 0;
+    TrackStatus status = TrackStatus::Free;
+
+    [[nodiscard]] bool live() const noexcept { return status != TrackStatus::Free; }
 };
 
 // Starts an IMM track from one detection. All models get the same state; the
 // probabilities start on the CV model, since a target is presumed not to be
 // manoeuvring until it shows otherwise.
 void imm_initiate(ImmTrack& track, const Measurement& z,
-                  const TrackerConfig& cfg, const ImmConfig& imm) noexcept;
+                  const TrackerConfig& cfg, const ImmConfig& imm,
+                  std::uint32_t id) noexcept;
 
 // Mixing followed by per-model prediction.
 //
@@ -111,6 +121,33 @@ bool imm_update(ImmTrack& track, const Measurement& z,
 // automatically by imm_predict and imm_update; exposed because a caller that
 // edits model probabilities by hand must restore the invariant.
 void imm_update_combined_estimate(ImmTrack& track) noexcept;
+
+// Normalised innovation squared of the COMBINED estimate, for gating and for
+// association cost.
+//
+// Gating on the mixture rather than per-model is the choice that matters here.
+// A per-model gate would let the worst-fitting model veto a measurement the
+// mixture accepts happily, and during a manoeuvre that is every model but one.
+// The mixture's covariance already carries the spread between models, so it
+// widens exactly when the models disagree -- which is when the gate should be
+// generous. That is the property a per-model gate throws away.
+[[nodiscard]] Real imm_track_nis(const ImmTrack& track, const Measurement& z,
+                                 const TrackerConfig& cfg) noexcept;
+
+// One IMM tracker step: predict, associate in global cost order, update,
+// apply the confirmation and deletion rules, and initiate from the leftovers.
+// The IMM counterpart of tracker_step(), with the same semantics.
+std::size_t imm_tracker_step(std::span<ImmTrack> tracks,
+                             std::span<const Measurement> measurements,
+                             const TrackerConfig& cfg,
+                             const ImmConfig& imm,
+                             Real time_s,
+                             std::uint32_t& next_id) noexcept;
+
+// Counts IMM tracks in a state, and the established ones (Confirmed+Coasting).
+[[nodiscard]] std::size_t imm_count_tracks(std::span<const ImmTrack> tracks,
+                                           TrackStatus status) noexcept;
+[[nodiscard]] std::size_t imm_count_established(std::span<const ImmTrack> tracks) noexcept;
 
 // Probability that the target is turning: 1 - P(constant velocity).
 //

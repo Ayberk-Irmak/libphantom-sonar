@@ -78,7 +78,7 @@ Outcome run(Real omega, std::size_t turn_start, std::size_t turn_end,
     ImmTrack it;
     Track ek;
     Measurement z0 = measure(truth, 0, rng, cfg);
-    imm_initiate(it, z0, cfg, imm);
+    imm_initiate(it, z0, cfg, imm, 1);
     track_initiate(ek, z0, cfg, 1);
 
     double imm_sse = 0, ekf_sse = 0, peak = 0;
@@ -171,7 +171,7 @@ PT_TEST(imm_reports_which_way_the_target_turned) {
         const Real omega = deg2rad(static_cast<Real>(3 * dir));
 
         ImmTrack it;
-        imm_initiate(it, measure(truth, 0, rng, cfg), cfg, imm);
+        imm_initiate(it, measure(truth, 0, rng, cfg), cfg, imm, 1);
         Real w_est = 0;
         for (std::size_t k = 1; k <= 30; ++k) {
             advance(truth, (k >= 10) ? omega : static_cast<Real>(0), kDt);
@@ -196,7 +196,7 @@ PT_TEST(model_probabilities_stay_a_probability_distribution) {
     pt::Rng rng(31337);
     Truth truth{1500, 6000, -20, 5};
     ImmTrack it;
-    imm_initiate(it, measure(truth, 0, rng, cfg), cfg, imm);
+    imm_initiate(it, measure(truth, 0, rng, cfg), cfg, imm, 1);
 
     double worst_sum_error = 0;
     Real smallest = 1;
@@ -242,7 +242,7 @@ PT_TEST(the_zero_turn_rate_limit_is_exactly_constant_velocity) {
         imm.turn_rate_rps = static_cast<Real>(std::pow(10.0, -e));
         imm.switch_probability = static_cast<Real>(1e-6);   // keep the models apart
         ImmTrack it;
-        imm_initiate(it, z, cfg, imm);
+        imm_initiate(it, z, cfg, imm, 1);
         for (std::size_t j = 0; j < kImmModels; ++j) {
             it.model_state[j].vx = 12;
             it.model_state[j].vy = -7;

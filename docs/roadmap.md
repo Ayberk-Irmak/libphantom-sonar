@@ -168,7 +168,7 @@ of the next. Joining them is cheaper than any new physics and worth more.
       estimation machinery rather than a fusion of what already exists, which is
       what this release was about.
 
-## v0.11 — Real data and manoeuvre ✅ *(current)*
+## v0.11 — Real data and manoeuvre ✅
 
 - [x] **An interacting-multiple-model filter.** Three models sharing one
       four-state vector: constant velocity, and coordinated turns at +/-omega.
@@ -200,15 +200,31 @@ of the next. Joining them is cheaper than any new physics and worth more.
       its state, replacing a Snell-invariant check that was largely measuring
       whether `acos` and `cos` round-trip. 186 turning points, all exact.
 
-## v0.12 — IMM in the tracker, then covert communication
+## v0.12 — IMM in the tracker, and the turn rate measured ✅ *(current)*
 
-- [ ] **Wire the IMM into `tracker_step()`**: per-model gating, association on
-      the combined estimate, and track management driven by the mixture rather
-      than one model. This is the integration v0.11 deliberately left out.
-- [ ] **Estimate the turn rate** rather than bracketing it, which needs a fifth
-      state and a nonlinear transition.
+- [x] **The IMM wired into a full tracker.** `imm_tracker_step()` carries the
+      same global-cost-ordered association and M-of-N management as
+      `tracker_step()`, gating on the COMBINED estimate rather than per model --
+      a per-model gate would let the worst-fitting model veto a measurement the
+      mixture accepts, which during a manoeuvre is every model but one. Two
+      targets turning in opposite directions hold two tracks through 40 scans
+      with the correct manoeuvre signs; 367 false alarms produce zero tracks.
+- [x] **The turn rate estimated rather than bracketed**, as a fifth state with a
+      nonlinear transition. Against models bracketed at 3 deg/s and a truth of
+      5 deg/s: **4.99 vs 2.62**. At 8 deg/s the IMM reports *less* turn than at
+      5, because once the truth leaves the bracket the models fit so badly that
+      probability drifts back to constant velocity -- a bracket does not degrade
+      gracefully, which is the finding that justifies the fifth state.
+- [x] **The trap found and documented**: with zero process noise on omega the
+      covariance shrinks, the gain dies, and the filter reports the SMALLEST
+      uncertainty of any setting about the MOST wrong answer (0.11 deg/s sigma,
+      2.08 deg/s estimate against a truth of 5.00). The default was lowered from
+      0.02 to 0.01 on the strength of the sweep.
+- [x] **Cost of the fifth state measured**: 1.02x on a straight target, which is
+      cheaper than expected -- an extra state costs almost nothing when the
+      measurement never moves it.
 
-## v0.12b — Covert acoustic communication
+## v0.13 — Covert acoustic communication
 
 - [ ] DSSS modulator/demodulator with configurable chip rate and explicit
       processing gain `10·log10(N)`
@@ -221,14 +237,14 @@ of the next. Joining them is cheaper than any new physics and worth more.
 - [ ] Bio-mimetic waveform shaping (spectral masking against ambient noise and
       biological transients)
 
-## v0.13 — Bindings and portability
+## v0.14 — Bindings and portability
 
 - [ ] Stable C ABI (`phantom.h`, hand-written, no generator)
 - [ ] Rust `phantom-sonar-sys` + safe wrapper crate
 - [ ] Cortex-M7 / RISC-V cross-compilation in CI with size and WCET reporting
 - [ ] `-fno-exceptions -fno-rtti` build mode
 
-## v0.14 — Hardware in the loop
+## v0.15 — Hardware in the loop
 
 See `docs/hardware.md` for the bench design and the bill of materials. Bench and
 tank only — a real acoustic transmitter in open water is a regulatory and

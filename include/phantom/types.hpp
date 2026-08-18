@@ -13,6 +13,15 @@ inline constexpr Real kDeg2Rad = kPi / static_cast<Real>(180);
 inline constexpr Real kRad2Deg = static_cast<Real>(180) / kPi;
 
 constexpr Real deg2rad(Real degrees) noexcept { return degrees * kDeg2Rad; }
+
+// Wraps an angle into [-pi, pi]. Needed wherever a bearing difference is taken:
+// without it a track sitting near +/-180 degrees produces a 2*pi innovation and
+// the filter diverges on the first update.
+constexpr Real wrap_pi(Real a) noexcept {
+    while (a > kPi) a -= static_cast<Real>(2) * kPi;
+    while (a < -kPi) a += static_cast<Real>(2) * kPi;
+    return a;
+}
 constexpr Real rad2deg(Real radians) noexcept { return radians * kRad2Deg; }
 
 constexpr Real clamp(Real v, Real lo, Real hi) noexcept {

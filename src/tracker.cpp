@@ -17,12 +17,6 @@ constexpr Real kHugeNis = static_cast<Real>(1e12);
 // measurement Jacobian divides by r^2.
 constexpr Real kMinRange = static_cast<Real>(1e-3);
 
-inline Real wrap_pi(Real a) noexcept {
-    while (a > kPi) a -= kTwo * kPi;
-    while (a < -kPi) a += kTwo * kPi;
-    return a;
-}
-
 constexpr std::size_t kMaxM = 3;   // range, bearing, and optionally range rate
 
 // Measurement Jacobian H (m x 4), row-major, for z = [range, bearing, rdot].

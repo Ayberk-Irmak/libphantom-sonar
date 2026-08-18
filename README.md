@@ -5,7 +5,7 @@ Zero dependencies, zero heap allocation, C++20.
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 ![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)
-![Status](https://img.shields.io/badge/status-v0.11%20real%20data-orange.svg)
+![Status](https://img.shields.io/badge/status-v0.12%20manoeuvre-orange.svg)
 ![Validated](https://img.shields.io/badge/validated-vs%20Bellhop-brightgreen.svg)
 
 ![Munk deep sound channel propagation](data/munk_rays.png)
@@ -511,8 +511,10 @@ tells you the code did not change. These tell you it is right:
 | Chen-Millero vs the published UNESCO check value | 1731.9954 vs 1731.995 |
 | Chen-Millero vs 220 published table values | 0.0499 m/s worst (table rounds to 0.05) |
 | Ray turning depth vs `c_src/cos θ₀`, real profiles | 186 turns, < 1e-9 m/s |
+| CTRV turn rate vs truth, outside the IMM's bracket | 4.99 vs 5.00 °/s |
+| CTRV zero-turn limit vs constant velocity | 8.322e-N, no jump at the series crossover |
 
-43259 checks. Clean under GCC 15 and Clang 21 with `-Wconversion -Wsign-conversion
+43287 checks. Clean under GCC 15 and Clang 21 with `-Wconversion -Wsign-conversion
 -Wold-style-cast -Wdouble-promotion -Werror`, and under ASan + UBSan. Passes in
 all four compiler × precision configurations. Zero allocation is proven by `nm` over the
 built archive, not asserted: the library references only libm and `memset`.
@@ -586,6 +588,57 @@ reports exactly zero drift — suspicious, not reassuring, since the tracer stor
 ξ and derives θ from it. Replaced with a turning-depth check that is independent
 of how the state is stored: at θ = 0 the sound speed must equal `c_src/cos θ₀`.
 186 turning points across six real profiles, all exact to 1e-9.
+
+## v0.12 — the turn rate measured, and the IMM in the tracker
+
+**A bracket does not degrade gracefully.** The IMM reports a blend of its model
+turn rates, so it cannot leave `[-ω, +ω]`. With models set for 3 °/s, against a
+five-state filter that estimates the rate instead:
+
+| truth | IMM (bracketed) | CTRV (estimated) |
+|---|---|---|
+| 2 °/s | 1.27 °/s | 1.02 °/s |
+| 5 °/s | 2.62 °/s | **4.99 °/s** |
+| 8 °/s | 1.82 °/s | **5.64 °/s** |
+
+Read the 8 °/s row: the IMM reports *less* turn than at 5 °/s. Once the truth
+leaves the bracket the ±ω models fit so badly that probability drifts back to
+constant velocity and the blend collapses toward zero. That is the finding that
+justifies carrying a fifth state.
+
+**And the trap in doing so.** The random walk on ω is the one parameter with no
+counterpart in a constant-velocity filter, and setting it to zero fails
+invisibly:
+
+| `q_w` | reported σ | estimate (truth 5.00 °/s) |
+|---|---|---|
+| **0** | **0.11 °/s** | **2.08 °/s** |
+| 0.005 | 0.91 °/s | 4.97 °/s |
+| 0.01 (default) | 1.54 °/s | 4.90 °/s |
+| 0.02 | 2.67 °/s | 4.89 °/s |
+
+With no process noise the covariance shrinks, the gain on the fifth state dies,
+and the filter reports the *smallest* uncertainty of any setting about the *most
+wrong* answer. Confident and wrong is worse than uncertain and wrong, because
+nothing downstream can tell. The default was lowered from 0.02 to 0.01 on this
+sweep.
+
+The fifth state costs 1.02× on a straight target — almost nothing, because the
+measurement never moves it.
+
+**Which to use:** CTRV *measures* a manoeuvre, an IMM *reacts* to one. The IMM
+responds faster when a turn starts, because a model that already fits is waiting
+to take over; CTRV reports the actual rate with no ceiling. They are not ordered
+and the library ships both.
+
+**`imm_tracker_step()`** completes the integration v0.11 left out — same
+association, same M-of-N management, gating on the combined estimate so the
+worst-fitting model cannot veto a measurement the mixture accepts:
+
+```
+two targets turning opposite ways, 40 scans -> 2 established tracks, signs correct
+367 false alarms over 200 scans             -> 0 established tracks
+```
 
 ## Measured performance
 

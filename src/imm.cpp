@@ -10,6 +10,8 @@ constexpr Real kZero = static_cast<Real>(0);
 constexpr Real kOne  = static_cast<Real>(1);
 constexpr Real kTwo  = static_cast<Real>(2);
 constexpr std::size_t kN = 4;
+// Matches tracker.cpp's: a NIS no real measurement can reach, so it never gates.
+constexpr Real kHugeNis = static_cast<Real>(1e30);
 
 // Turn rate of each model, in units of imm.turn_rate_rps.
 constexpr Real kModelRateScale[kImmModels] = {kZero, kOne, -kOne};
@@ -107,9 +109,10 @@ Real switch_prob(const ImmConfig& imm, std::size_t i, std::size_t j) noexcept {
 }  // namespace
 
 void imm_initiate(ImmTrack& track, const Measurement& z,
-                  const TrackerConfig& cfg, const ImmConfig& imm) noexcept {
+                  const TrackerConfig& cfg, const ImmConfig& imm,
+                  std::uint32_t id) noexcept {
     Track seed;
-    track_initiate(seed, z, cfg, 0);
+    track_initiate(seed, z, cfg, id);
     track.state = seed.state;
     track.covariance = seed.covariance;
     for (std::size_t j = 0; j < kImmModels; ++j) {
@@ -123,14 +126,19 @@ void imm_initiate(ImmTrack& track, const Measurement& z,
     track.model_prob[1] = static_cast<Real>(0.1);
     track.model_prob[2] = static_cast<Real>(0.1);
     track.last_update_s = z.time_s;
+    track.amplitude = z.amplitude;
+    track.label = z.label;
+    track.id = id;
     track.hits = 1;
-    track.live = true;
+    track.misses = 0;
+    track.age = 0;
+    track.status = TrackStatus::Tentative;
     (void)imm;
 }
 
 void imm_predict(ImmTrack& track, Real dt,
                  const TrackerConfig& cfg, const ImmConfig& imm) noexcept {
-    if (!track.live) return;
+    if (!track.live()) return;
     (void)cfg;
 
     // --- Mixing -----------------------------------------------------------
@@ -200,11 +208,12 @@ void imm_predict(ImmTrack& track, Real dt,
 
     // The combined prediction, so a caller can gate before updating.
     imm_update_combined_estimate(track);
+    ++track.age;
 }
 
 bool imm_update(ImmTrack& track, const Measurement& z,
                 const TrackerConfig& cfg, const ImmConfig& imm) noexcept {
-    if (!track.live) return false;
+    if (!track.live()) return false;
 
     // c_j again: the probability of being in model j after the switch, before
     // the measurement is seen. This is the prior the likelihood multiplies.
@@ -260,7 +269,13 @@ bool imm_update(ImmTrack& track, const Measurement& z,
 
     imm_update_combined_estimate(track);
     track.last_update_s = z.time_s;
+    track.label = z.label;
+    track.amplitude = (track.hits == 0)
+                    ? z.amplitude
+                    : static_cast<Real>(0.7) * track.amplitude
+                    + static_cast<Real>(0.3) * z.amplitude;
     ++track.hits;
+    track.misses = 0;
     return true;
 }
 
@@ -299,6 +314,131 @@ Real imm_turn_rate_estimate(const ImmTrack& track, const ImmConfig& imm) noexcep
         w += track.model_prob[j] * kModelRateScale[j] * imm.turn_rate_rps;
     }
     return w;
+}
+
+
+
+Real imm_track_nis(const ImmTrack& track, const Measurement& z,
+                   const TrackerConfig& cfg) noexcept {
+    if (!track.live()) return kHugeNis;
+    Track tmp;
+    tmp.state = track.state;
+    tmp.covariance = track.covariance;
+    tmp.status = TrackStatus::Confirmed;
+    return track_nis(tmp, z, cfg);
+}
+
+std::size_t imm_count_tracks(std::span<const ImmTrack> tracks, TrackStatus status) noexcept {
+    std::size_t n = 0;
+    for (const ImmTrack& t : tracks) {
+        if (t.status == status) ++n;
+    }
+    return n;
+}
+
+std::size_t imm_count_established(std::span<const ImmTrack> tracks) noexcept {
+    std::size_t n = 0;
+    for (const ImmTrack& t : tracks) {
+        if (t.status == TrackStatus::Confirmed || t.status == TrackStatus::Coasting) ++n;
+    }
+    return n;
+}
+
+std::size_t imm_tracker_step(std::span<ImmTrack> tracks,
+                             std::span<const Measurement> measurements,
+                             const TrackerConfig& cfg,
+                             const ImmConfig& imm,
+                             Real time_s,
+                             std::uint32_t& next_id) noexcept {
+    // --- 1. Predict ---------------------------------------------------------
+    for (ImmTrack& t : tracks) {
+        if (!t.live()) continue;
+        const Real dt = time_s - t.last_update_s;
+        if (dt > kZero) imm_predict(t, dt, cfg, imm);
+    }
+
+    // --- 2. Association, in global cost order --------------------------------
+    // Identical in structure to tracker_step's: build every gating pair, sort by
+    // NIS, assign best-first. The cost is the COMBINED estimate's NIS, for the
+    // reason given in the header -- a per-model gate lets the worst model veto.
+    constexpr std::size_t kMaxMeas = 64;
+    constexpr std::size_t kMaxPairs = 512;
+    bool used[kMaxMeas] = {};
+    const std::size_t n_meas = (measurements.size() < kMaxMeas) ? measurements.size() : kMaxMeas;
+
+    struct Pair { Real cost; std::uint16_t track; std::uint16_t meas; };
+    Pair pairs[kMaxPairs];
+    std::size_t n_pairs = 0;
+
+    for (std::size_t ti = 0; ti < tracks.size() && n_pairs < kMaxPairs; ++ti) {
+        if (!tracks[ti].live()) continue;
+        for (std::size_t m = 0; m < n_meas && n_pairs < kMaxPairs; ++m) {
+            const Real d = imm_track_nis(tracks[ti], measurements[m], cfg);
+            const Real gate = measurements[m].has_range_rate ? cfg.gate_chi2_3dof
+                                                             : cfg.gate_chi2_2dof;
+            if (d < gate) {
+                pairs[n_pairs++] = Pair{d, static_cast<std::uint16_t>(ti),
+                                        static_cast<std::uint16_t>(m)};
+            }
+        }
+    }
+    for (std::size_t i = 1; i < n_pairs; ++i) {
+        const Pair key = pairs[i];
+        std::size_t j = i;
+        while (j > 0 && pairs[j - 1].cost > key.cost) {
+            pairs[j] = pairs[j - 1];
+            --j;
+        }
+        pairs[j] = key;
+    }
+
+    bool track_taken[kMaxMeas] = {};
+    const std::size_t n_tracks = (tracks.size() < kMaxMeas) ? tracks.size() : kMaxMeas;
+    for (std::size_t i = 0; i < n_pairs; ++i) {
+        const std::size_t ti = pairs[i].track;
+        const std::size_t mi = pairs[i].meas;
+        if (ti >= n_tracks || track_taken[ti] || used[mi]) continue;
+        if (imm_update(tracks[ti], measurements[mi], cfg, imm)) {
+            track_taken[ti] = true;
+            used[mi] = true;
+        }
+    }
+    for (std::size_t ti = 0; ti < tracks.size(); ++ti) {
+        if (!tracks[ti].live()) continue;
+        if (ti >= n_tracks || !track_taken[ti]) ++tracks[ti].misses;
+    }
+
+    // --- 3. Confirmation and deletion ----------------------------------------
+    for (ImmTrack& t : tracks) {
+        if (!t.live()) continue;
+        if (t.misses >= cfg.delete_misses) {
+            t.status = TrackStatus::Free;
+            continue;
+        }
+        if (t.status == TrackStatus::Tentative && t.hits >= cfg.confirm_hits) {
+            t.status = TrackStatus::Confirmed;
+        } else if (t.misses > 0 && t.status == TrackStatus::Confirmed) {
+            t.status = TrackStatus::Coasting;
+        } else if (t.misses == 0 && t.status == TrackStatus::Coasting) {
+            t.status = TrackStatus::Confirmed;
+        }
+    }
+
+    // --- 4. Initiate ---------------------------------------------------------
+    for (std::size_t m = 0; m < n_meas; ++m) {
+        if (used[m]) continue;
+        for (ImmTrack& t : tracks) {
+            if (t.live()) continue;
+            imm_initiate(t, measurements[m], cfg, imm, next_id++);
+            break;
+        }
+    }
+
+    std::size_t live = 0;
+    for (const ImmTrack& t : tracks) {
+        if (t.live()) ++live;
+    }
+    return live;
 }
 
 }  // namespace phantom
