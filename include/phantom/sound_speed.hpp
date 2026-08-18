@@ -62,7 +62,33 @@ constexpr Real mackenzie(Real temperature_c, Real salinity_psu, Real depth_m) no
 }
 
 // ---------------------------------------------------------------------------
-// Chen & Millero (1977) — UNESCO algorithm.
+// Chen & Millero — the UNESCO algorithm. TWO versions, on two temperature
+// scales, because there is no single right answer and mixing them is a bug.
+//
+//   chen_millero_1977()  the original, Chen & Millero (1977) as published in
+//                        Fofonoff & Millard (1983), UNESCO Technical Papers in
+//                        Marine Science 44, pp. 46-47. Temperature on IPTS-68.
+//                        This is the version the official check value and the
+//                        official table belong to, so it is the one the tests
+//                        verify against them.
+//
+//   chen_millero_its90() Wong & Zhu (1995), who refitted the coefficients after
+//                        the adoption of ITS-90. Temperature on ITS-90.
+//                        Coefficients as tabulated by NPL. This is what modern
+//                        data wants: every measurement since 1990 is ITS-90.
+//
+// chen_millero() is an alias for the ITS-90 version, and unesco() calls it.
+//
+// A HISTORY NOTE, because this cost a release to find. Until v0.11 there was a
+// single chen_millero() whose coefficients were Wong & Zhu's EXCEPT for A02 and
+// A03, which were the 1977 originals. It was therefore neither equation, its
+// header credited Chen & Millero (1977) when 24 of its 42 coefficients were
+// Wong & Zhu's, and it missed the official check value by 0.016 m/s. Nothing
+// caught it, because the only tests were mutual agreement with Medwin and
+// Mackenzie -- which disagree by 0.1 m/s anyway and so cannot see a 0.016 m/s
+// error. Checking against a PUBLISHED value, not against yourself, is the
+// entire point of §2 of docs/validation.md.
+//
 // T in degrees C, S in PSU, P in BAR (gauge, i.e. 0 at the surface).
 // Validity: 0 <= T <= 40, 0 <= S <= 40, 0 <= P <= 1000 bar.
 //   c = Cw(T,P) + A(T,P)*S + B(T,P)*S^1.5 + D(T,P)*S^2
@@ -71,7 +97,55 @@ constexpr Real mackenzie(Real temperature_c, Real salinity_psu, Real depth_m) no
 // evaluable (C++26 does). medwin() and mackenzie() are polynomial and stay
 // constexpr, so compile-time profile generation still works with those.
 // ---------------------------------------------------------------------------
-inline Real chen_millero(Real temperature_c, Real salinity_psu, Real pressure_bar) noexcept {
+
+// Original Chen & Millero (1977), IPTS-68. Reproduces the UNESCO 44 check
+// value 1731.995 m/s at S = 40, T = 40 C, P = 1000 bar (10000 dbar).
+inline Real chen_millero_1977(Real temperature_c, Real salinity_psu,
+                              Real pressure_bar) noexcept {
+    const Real t = temperature_c;
+    const Real p = pressure_bar;
+
+    // Horner form, matching the published FORTRAN listing (UNESCO 44 p. 49)
+    // term for term so the two can be compared by eye.
+    const Real d = static_cast<Real>(1.727e-3) - static_cast<Real>(7.9836e-6) * p;
+
+    const Real b1 = static_cast<Real>(7.3637e-5) + static_cast<Real>(1.7945e-7) * t;
+    const Real b0 = -static_cast<Real>(1.922e-2) - static_cast<Real>(4.42e-5) * t;
+    const Real b  = b0 + b1 * p;
+
+    const Real a3 = (-static_cast<Real>(3.389e-13) * t + static_cast<Real>(6.649e-12)) * t
+                  + static_cast<Real>(1.100e-10);
+    const Real a2 = ((static_cast<Real>(7.988e-12) * t - static_cast<Real>(1.6002e-10)) * t
+                  + static_cast<Real>(9.1041e-9)) * t - static_cast<Real>(3.9064e-7);
+    const Real a1 = (((-static_cast<Real>(2.0122e-10) * t + static_cast<Real>(1.0507e-8)) * t
+                  - static_cast<Real>(6.4885e-8)) * t - static_cast<Real>(1.2580e-5)) * t
+                  + static_cast<Real>(9.4742e-5);
+    const Real a0 = (((-static_cast<Real>(3.21e-8) * t + static_cast<Real>(2.006e-6)) * t
+                  + static_cast<Real>(7.164e-5)) * t - static_cast<Real>(1.262e-2)) * t
+                  + static_cast<Real>(1.389);
+    const Real a = ((a3 * p + a2) * p + a1) * p + a0;
+
+    const Real c3 = (-static_cast<Real>(2.3643e-12) * t + static_cast<Real>(3.8504e-10)) * t
+                  - static_cast<Real>(9.7729e-9);
+    const Real c2 = (((static_cast<Real>(1.0405e-12) * t - static_cast<Real>(2.5335e-10)) * t
+                  + static_cast<Real>(2.5974e-8)) * t - static_cast<Real>(1.7107e-6)) * t
+                  + static_cast<Real>(3.1260e-5);
+    const Real c1 = (((-static_cast<Real>(6.1185e-10) * t + static_cast<Real>(1.3621e-7)) * t
+                  - static_cast<Real>(8.1788e-6)) * t + static_cast<Real>(6.8982e-4)) * t
+                  + static_cast<Real>(0.153563);
+    const Real c0 = ((((static_cast<Real>(3.1464e-9) * t - static_cast<Real>(1.47800e-6)) * t
+                  + static_cast<Real>(3.3420e-4)) * t - static_cast<Real>(5.80852e-2)) * t
+                  + static_cast<Real>(5.03711)) * t + static_cast<Real>(1402.388);
+    const Real c = ((c3 * p + c2) * p + c1) * p + c0;
+
+    const Real sv = salinity_psu;
+    const Real sr = (sv > 0) ? std::sqrt(sv) : static_cast<Real>(0);
+    return c + (a + b * sr + d * sv) * sv;
+}
+
+// Wong & Zhu (1995), ITS-90. Coefficients per the NPL technical guide.
+inline Real chen_millero_its90(Real temperature_c, Real salinity_psu,
+                               Real pressure_bar) noexcept {
     const Real t = temperature_c;
     const Real p = pressure_bar;
     const Real t2 = t * t, t3 = t2 * t, t4 = t3 * t, t5 = t4 * t;
@@ -99,11 +173,12 @@ inline Real chen_millero(Real temperature_c, Real salinity_psu, Real pressure_ba
                    - static_cast<Real>(2.3654e-12) * t2;
     const Real cw = cw0 + cw1 * p + cw2 * p2 + cw3 * p3;
 
-    // Linear salinity term.
+    // Linear salinity term. A02 and A03 are the two that were wrong before
+    // v0.11: they held the 1977 values 7.164e-5 and 2.006e-6.
     const Real a0 = static_cast<Real>(1.389)
                   - static_cast<Real>(1.262e-2) * t
-                  + static_cast<Real>(7.164e-5) * t2
-                  + static_cast<Real>(2.006e-6) * t3
+                  + static_cast<Real>(7.166e-5) * t2
+                  + static_cast<Real>(2.008e-6) * t3
                   - static_cast<Real>(3.21e-8) * t4;
     const Real a1 = static_cast<Real>(9.4742e-5)
                   - static_cast<Real>(1.2583e-5) * t
@@ -127,9 +202,68 @@ inline Real chen_millero(Real temperature_c, Real salinity_psu, Real pressure_ba
     // S^2 term.
     const Real d = static_cast<Real>(1.727e-3) - static_cast<Real>(7.9836e-6) * p;
 
-    const Real s   = salinity_psu;
-    const Real s15 = (s > 0) ? s * std::sqrt(s) : static_cast<Real>(0);
-    return cw + a * s + b * s15 + d * s * s;
+    const Real sv  = salinity_psu;
+    const Real s15 = (sv > 0) ? sv * std::sqrt(sv) : static_cast<Real>(0);
+    return cw + a * sv + b * s15 + d * sv * sv;
+}
+
+// The library default: ITS-90, because that is the scale modern data is on.
+inline Real chen_millero(Real temperature_c, Real salinity_psu,
+                         Real pressure_bar) noexcept {
+    return chen_millero_its90(temperature_c, salinity_psu, pressure_bar);
+}
+
+// IPTS-68 <-> ITS-90. The oceanographic working relation (Saunders 1990):
+// t68 = 1.00024 * t90. Feeding a t90 into the 1977 equation without this is a
+// ~0.01 m/s error -- the same size as the coefficient bug it hides.
+constexpr Real t90_to_t68(Real t90) noexcept { return static_cast<Real>(1.00024) * t90; }
+constexpr Real t68_to_t90(Real t68) noexcept { return t68 / static_cast<Real>(1.00024); }
+
+// ---------------------------------------------------------------------------
+// Del Grosso (1974), in Wong & Zhu's (1995) ITS-90 reformulation.
+// Coefficients per the NPL technical guide.
+//
+// Genuinely INDEPENDENT of Chen-Millero: a different laboratory, a different
+// data set, a different functional form. Some authors prefer it inside its own
+// (narrower) domain. Having it here means the UNESCO path can be cross-checked
+// against something other than itself.
+//
+// T in degrees C (ITS-90), S in PSU, P in kg/cm^2.
+// Validity: 0 <= T <= 30, 30 <= S <= 40, 0 <= P <= 1000 kg/cm^2.
+// ---------------------------------------------------------------------------
+inline Real del_grosso(Real temperature_c, Real salinity_psu,
+                       Real pressure_kgcm2) noexcept {
+    const Real t = temperature_c;
+    const Real s = salinity_psu;
+    const Real p = pressure_kgcm2;
+    const Real t2 = t * t, t3 = t2 * t;
+    const Real s2 = s * s;
+    const Real p2 = p * p, p3 = p2 * p;
+
+    const Real dct = static_cast<Real>(0.5012285e1) * t
+                   - static_cast<Real>(0.551184e-1) * t2
+                   + static_cast<Real>(0.221649e-3) * t3;
+    const Real dcs = static_cast<Real>(0.1329530e1) * s
+                   + static_cast<Real>(0.1288598e-3) * s2;
+    const Real dcp = static_cast<Real>(0.1560592) * p
+                   + static_cast<Real>(0.2449993e-4) * p2
+                   - static_cast<Real>(0.8833959e-8) * p3;
+    const Real dcstp = -static_cast<Real>(0.1275936e-1) * s * t
+                     + static_cast<Real>(0.6353509e-2) * t * p
+                     + static_cast<Real>(0.2656174e-7) * t2 * p2
+                     - static_cast<Real>(0.1593895e-5) * t * p2
+                     + static_cast<Real>(0.5222483e-9) * t * p3
+                     - static_cast<Real>(0.4383615e-6) * t3 * p
+                     - static_cast<Real>(0.1616745e-8) * s2 * p2
+                     + static_cast<Real>(0.9688441e-4) * s * t2
+                     + static_cast<Real>(0.4857614e-5) * s2 * t * p
+                     - static_cast<Real>(0.3406824e-3) * s * t * p;
+    return static_cast<Real>(1402.392) + dct + dcs + dcp + dcstp;
+}
+
+// 1 bar = 1.019716 kg/cm^2 (NPL: 100 kPa = 1.019716 kg/cm^2).
+constexpr Real bar_to_kgcm2(Real bar) noexcept {
+    return bar * static_cast<Real>(1.019716);
 }
 
 // ---------------------------------------------------------------------------

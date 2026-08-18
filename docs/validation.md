@@ -857,14 +857,178 @@ like a covariance and read a 9° source at 3.3°. The invariant that catches thi
 is **persymmetry**: a correct forward-backward result has it, a transposed one
 does not.
 
-## 13. Build and runtime hygiene ✅
+## 13. Interacting multiple models — verified ✅
+
+See `docs/math_spec.md` §18 for the algorithm.
+
+### The trade, split by phase
+
+Target turning at 3 °/s between scans 15 and 35, against a single-model EKF
+tuned with process noise *between* the IMM's two:
+
+| phase | IMM | single-model EKF | ratio |
+|---|---|---|---|
+| during the turn | 37.31 m | 36.68 m | **0.98×** |
+| after it ends | 25.88 m | 44.53 m | **1.72×** |
+| overall | 44.91 m | 50.74 m | 1.13× |
+
+**The gain is in recovery, not in the turn**, and during the manoeuvre the IMM
+is marginally worse. That is not the usual description of an IMM, and it is what
+the measurement says.
+
+On a straight target it costs nothing: 27.40 m vs 27.88 m, so the win is not
+simply more process noise in disguise.
+
+### The manoeuvre detector
+
+Peak `1 − μ_CV` during the turn: **0.991**. Direction recovered correctly
+(truth ±3 °/s → ±2.03 / ±2.27 °/s). The estimate saturates at ±ω by
+construction and is not a turn-rate measurement.
+
+### Invariants
+
+Over 200 scans of alternating 6 °/s turns: worst `|Σμ − 1|` = 2.22e-16, smallest
+model probability 1.4e-2 — no model is ever driven to zero, from which it could
+not recover.
+
+The `w → 0` limit converges as 6.946e-N with no jump at the series crossover.
+In `float` it floors at 5.0e-4 m, which is the precision limit of differencing
+two ~5000 m positions, not a defect; the test is precision-aware.
+
+## 14. Sound speed against published values — verified ✅
+
+The most important result in this release is a **bug that eleven releases of
+mutual-agreement testing did not find**.
+
+### The bug
+
+`chen_millero()` held Wong & Zhu's (1995) ITS-90 coefficients for 40 of 42
+terms and Chen & Millero's 1977 originals for `A02` and `A03`. It was therefore
+neither equation, and it missed the official check value by 0.016 m/s.
+
+Nothing caught it because the only tests were mutual agreement between Medwin,
+Mackenzie and Chen-Millero — and those agree only to ~0.1 m/s, which cannot see
+a 0.016 m/s error. **Mutual agreement bounds how wrong you can be by how much
+your methods differ. That is not the same as being right.**
+
+### The published check value
+
+UNESCO Technical Papers in Marine Science 44 (Fofonoff & Millard 1983), p. 48
+and the FORTRAN listing on p. 49:
+
+```
+CHECKVALUE: SVEL=1731.995 M/S, S=40 (PSS-78), T=40 DEG C, P=10000 DBAR
+```
+
+`chen_millero_1977()` returns **1731.9954**.
+
+### The published table
+
+The same document, p. 50: 220 values over S = 25/30/35/40 PSU, T = 0…40 °C
+(IPTS-68), p = 0…10000 dbar. All 220 are in `tests/data/unesco44_table.hpp`.
+
+```
+220 published values, worst |delta| = 0.0499 m/s (at S=35 T=0 p=10000 dbar)
+the table is printed to 0.1 m/s, so 0.05 is its rounding half-width
+```
+
+The agreement is as tight as the published data can express. Note also that a
+transcription error would have shown as a large outlier at one cell rather than
+a uniform near-miss, which is how the transcription itself was checked.
+
+### Two equations, not one equation and one mistake
+
+| | same T fed to both | after t68 = 1.00024 t90 |
+|---|---|---|
+| worst |1977 − ITS-90| | 0.0208 m/s | **0.0056 m/s** |
+
+Converting the temperature scale improves the agreement 3.7×, and the 0.0208
+figure sits inside Wong & Zhu's own stated "within 0.024 m/s" for their
+revision. That is what makes the two versions legitimate rather than a typo.
+
+### Del Grosso: an independent equation, and where a validity box lies
+
+| region | worst |UNESCO − Del Grosso| |
+|---|---|
+| 0 – 1000 m (most sonar work) | 0.41 m/s |
+| 0 – 3000 m | 0.76 m/s |
+| 0 – 6000 m | 0.82 m/s |
+| 0 – 9810 m (Del Grosso's own limit) | 1.33 m/s |
+| full nominal validity box | **3.93 m/s** |
+
+The bottom row is 26 °C water under 1000 bar — a combination no sea contains and
+neither equation was fitted to. Quoting a disagreement over a whole (S, T, P)
+rectangle measures its corners, not the ocean.
+
+Read the top row against Chen & Millero's quoted standard deviation of
+0.19 m/s: two independent equations differ by about twice the uncertainty
+either claims. **That is the real accuracy of the speed of sound in seawater**,
+and it is why this document refuses to quote ray paths to the metre.
+
+The bounds asserted in these tests are regression bounds set from the measured
+values, not predictions from theory. There is no theory that says how far two
+empirical fits should drift apart.
+
+## 15. Real ocean profiles — verified ✅
+
+Six WOA23 profiles, fetched from NOAA NCEI by `tools/fetch_woa_profiles.py`.
+Every number's provenance is a URL that can be re-fetched.
+
+| site | max depth | c surface | c axis | axis depth |
+|---|---|---|---|---|
+| aegean | 650 m | 1522.1 | 1514.4 | 175 m |
+| black-sea | 2200 m | 1486.9 | 1462.6 | 55 m |
+| eq-pacific | 4300 m | 1539.1 | 1484.9 | 950 m |
+| levantine | 2400 m | 1530.6 | 1516.1 | 375 m |
+| n-atlantic | 4700 m | 1509.0 | 1486.3 | 950 m |
+| norwegian | 3200 m | 1477.4 | 1463.7 | 850 m |
+
+**The shipped descriptions are tested against the shipped data.** An earlier
+draft called the Norwegian Sea upward-refracting and put the North Atlantic axis
+at 1100 m. Neither survived contact with the profiles; both were corrected, and
+a test now asserts the structure each description claims.
+
+### Where ignoring salinity stops being safe
+
+Error from assuming 35 PSU instead of the measured value:
+
+| site | worst |
+|---|---|
+| black-sea | **20.32 m/s** |
+| aegean | 4.68 m/s |
+| levantine | 4.74 m/s |
+| n-atlantic | 0.82 m/s |
+| eq-pacific | 0.58 m/s |
+| norwegian | 0.19 m/s |
+
+The Black Sea surface is 18.2 PSU. The 20.3 m/s error is the same size as the
+whole 24 m/s channel excess measured there — assume 35 PSU and the channel you
+trace is not the one that exists.
+
+### A test that was measuring itself
+
+Snell's invariant over real profiles reports **exactly zero** drift, which is
+suspicious rather than reassuring: the tracer stores ξ and derives θ from it, so
+`cos θ / c` largely measures whether `acos` and `cos` round-trip. It cannot
+catch a ray that turns in the wrong *place*.
+
+The turning-depth check can. At θ = 0 the local sound speed must equal
+`c_source / cos θ₀`, which is independent of how θ is stored. Over **186 turning
+points** across six real profiles the worst error is below **1e-9 m/s**.
+
+The first version of that check reported errors up to 4.3 m/s that were entirely
+its own: it detected turns by a sign change across index `i`, and because the
+turn itself sits at exactly zero — and zero is not `> 0` — the point *before* the
+turn also looked like a reversal.
+
+## 16. Build and runtime hygiene ✅
 
 | Configuration | Result |
 |---|---|
 | GCC 15.3, `-Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion -Wold-style-cast -Wcast-qual -Wdouble-promotion -Werror` | clean |
 | Clang 21.1, same set | clean |
-| AddressSanitizer + UndefinedBehaviorSanitizer | clean, 41044 checks |
-| `Real = float` (`-DPHANTOM_REAL_FLOAT=ON`) | 41044 checks pass, all four compiler × precision configurations |
+| AddressSanitizer + UndefinedBehaviorSanitizer | clean, 43259 checks |
+| `Real = float` (`-DPHANTOM_REAL_FLOAT=ON`) | passes, all four compiler × precision configurations |
 | Heap allocations during execution | **zero** — proven by `nm` over the built archive: the library references only libm and `memset` |
 
 ### A false verification, and the guard added for it
@@ -896,7 +1060,7 @@ layers:
 acceptable if you are differencing travel times for ranging. Use `double` unless
 your FPU forces otherwise.
 
-## 14. Performance (measured, not claimed)
+## 17. Performance (measured, not claimed)
 
 13th Gen Intel Core i7-13620H, `-O3`, single thread:
 
@@ -936,7 +1100,7 @@ actually constrains a control loop, and measures **52 ns**. Re-run
 guarantee; these numbers are not a substitute for WCET analysis on the target
 silicon.
 
-## 15. Self-consistent but NOT independently verified ⚠️
+## 18. Self-consistent but NOT independently verified ⚠️
 
 - **Chapman-Harris surface backscatter coefficients.** The formula is written
   out in the header so a reader can check it, and its behaviour is verified
@@ -957,7 +1121,7 @@ silicon.
 - **Real measured T/S profiles.** Everything so far uses analytic profiles
   (Munk, linear, isovelocity). Feeding World Ocean Atlas / Argo data is v0.2.
 
-## 16. Known limitations — not bugs, scope ⚠️
+## 19. Known limitations — not bugs, scope ⚠️
 
 - **Shadow fraction depends on ray density.** Gaps between adjacent rays read as
   shadow. Measured convergence for the 100 km Munk case on a 500×250 grid:
@@ -987,14 +1151,19 @@ silicon.
   frequency-dependent.
 - **2-D (range–depth) only.** No azimuthal coupling or out-of-plane refraction.
 
-## 17. Not implemented in v0.10
+## 20. Not implemented in v0.11
 
 `BioMimeticCommEngine` is not in this release. See `docs/roadmap.md`.
 
 Known gaps within what *is* shipped:
 
-- **Single motion model.** Constant velocity only — no manoeuvre model, no IMM,
-  so a hard turn is absorbed as process noise or gated out.
+- **The IMM is not wired into `tracker_step()`.** The filter is implemented and
+  verified on its own; association, gating and track management still run the
+  single-model EKF. Joining them is v0.12.
+- **Fixed turn rates.** The IMM brackets a manoeuvre with ±ω rather than
+  estimating ω, so a target turning harder than ω saturates the estimate.
+- **Profiles are a climatology**, not casts: no eddy, internal wave or diurnal
+  layer survives a decadal 1° average.
 - **Association is greedy over a global cost ordering**, not a Hungarian
   assignment. It fixes the crossing case (§12) but is not provably optimal.
 - **Ghost recognition needs a waveform label.** A caller that reports the same
@@ -1013,7 +1182,7 @@ Known gaps within what *is* shipped:
 ```bash
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
-./build/phantom_tests          # 41044 checks
+./build/phantom_tests          # 43259 checks
 ./build/phantom_bench          # timing table above
 ./build/munk_simulation data   # CSV + console report
 ./build/ping_intercept data    # streaming ping detection demo

@@ -138,7 +138,7 @@ own waveforms. This closes that, and joins the array to the analyser.
   the honest outcome. Ghosts repeat; false alarms do not, and only the latter
   are what time consistency removes.
 
-## v0.10 — Fusing what is already measured ✅ *(current)*
+## v0.10 — Fusing what is already measured ✅
 
 Several quantities were measured by one subsystem and discarded at the boundary
 of the next. Joining them is cheaper than any new physics and worth more.
@@ -168,20 +168,47 @@ of the next. Joining them is cheaper than any new physics and worth more.
       estimation machinery rather than a fusion of what already exists, which is
       what this release was about.
 
-## v0.11 — Real data and manoeuvre
+## v0.11 — Real data and manoeuvre ✅ *(current)*
 
-- [ ] **An interacting-multiple-model filter** (deferred from v0.10). Constant
-      velocity absorbs a hard turn as process noise or gates it out; an IMM over
-      CV and coordinated-turn models does not.
-- [x] **Bellhop cross-validation.** Done in v0.1.1. Both codes read the same
-      `.env`; Bellhop converges toward the analytic arc solution as its step
-      shrinks. See `docs/validation.md §2`.
-- [ ] **Chen-Millero against the published UNESCO check table**, as a unit test
-      with the official values rather than mutual agreement between equations.
-- [ ] **Real T/S profiles.** World Ocean Atlas (WOA23) and Argo float ingest;
-      ship two or three real regional profiles in `data/` with provenance.
+- [x] **An interacting-multiple-model filter.** Three models sharing one
+      four-state vector: constant velocity, and coordinated turns at +/-omega.
+      Against a single-model EKF on a 3 deg/s turn the gain is **1.72x AFTER
+      the manoeuvre and 0.98x during it** -- the win is in recovery, not in the
+      turn, which is not the usual claim and is what the measurement says.
+      Costs nothing on a straight target (27.40 m vs 27.88 m). Ships a free
+      manoeuvre detector: peak P(manoeuvre) 0.991, direction recovered.
+      NOT yet wired into tracker_step(); that is v0.12.
+- [x] **Chen-Millero against the published UNESCO check table.** This found a
+      real bug: the equation was Wong & Zhu's ITS-90 coefficients with two
+      terms (A02, A03) left at their 1977 values, so it was neither equation and
+      missed the official check value by 0.016 m/s. Eleven releases of
+      mutual-agreement testing could not see it, because the equations only
+      agree to 0.1 m/s. Now both versions are implemented properly and verified
+      against the primary source: check value **1731.9954** vs published
+      1731.995, and all **220 table values** within 0.0499 m/s -- the table's
+      own rounding half-width.
+- [x] **Del Grosso (1974)** added as a genuinely independent fourth equation.
+      Its disagreement with UNESCO is 0.41 m/s in the top kilometre and 3.93 m/s
+      over the full nominal validity box -- the difference being that the box
+      contains 26 C water under 1000 bar, which no sea does.
+- [x] **Real T/S profiles.** Six WOA23 sites (Levantine, Aegean, Black Sea,
+      North Atlantic, Norwegian, equatorial Pacific), fetched over OPeNDAP by
+      `tools/fetch_woa_profiles.py` so every number's provenance is a URL. The
+      Black Sea earns its place: at 18.2 PSU surface salinity, assuming the
+      usual 35 PSU is a 20 m/s error -- the size of the whole channel feature.
+- [x] **A turning-depth check** that is independent of how the tracer stores
+      its state, replacing a Snell-invariant check that was largely measuring
+      whether `acos` and `cos` round-trip. 186 turning points, all exact.
 
-## v0.12 — Covert acoustic communication
+## v0.12 — IMM in the tracker, then covert communication
+
+- [ ] **Wire the IMM into `tracker_step()`**: per-model gating, association on
+      the combined estimate, and track management driven by the mixture rather
+      than one model. This is the integration v0.11 deliberately left out.
+- [ ] **Estimate the turn rate** rather than bracketing it, which needs a fifth
+      state and a nonlinear transition.
+
+## v0.12b — Covert acoustic communication
 
 - [ ] DSSS modulator/demodulator with configurable chip rate and explicit
       processing gain `10·log10(N)`

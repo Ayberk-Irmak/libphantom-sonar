@@ -229,6 +229,47 @@ Real track_nis(const Track& track, const Measurement& z,
     return (d >= kZero) ? d : kHugeNis;
 }
 
+Real measurement_likelihood(const Track& track, const Measurement& z,
+                            const TrackerConfig& cfg) noexcept {
+    if (!track.live()) return kZero;
+    const Real r = track.state.range_m();
+    if (!(r > kMinRange)) return kZero;
+
+    std::array<Real, kMaxM * kN> h{};
+    const std::size_t m = jacobian(track.state, r, z.has_range_rate, h);
+
+    std::array<Real, kN * kMaxM> pht{};
+    std::array<Real, kMaxM * kMaxM> sm{};
+    innovation_covariance(track, h, m, cfg, pht, sm);
+
+    std::array<Real, kMaxM * kMaxM> l = sm;
+    if (!small_cholesky(l, m)) return kZero;
+
+    std::array<Real, kMaxM> y{};
+    innovation(track, z, r, y);
+    std::array<Real, kMaxM> x = y;
+    small_cholesky_solve(l, m, x);
+
+    Real d = kZero;
+    for (std::size_t i = 0; i < m; ++i) d += y[i] * x[i];
+    if (!(d >= kZero)) return kZero;
+
+    // |S| = (prod L_ii)^2 from the Cholesky factor, so the determinant costs
+    // nothing beyond the solve that was needed anyway.
+    Real log_det = kZero;
+    for (std::size_t i = 0; i < m; ++i) {
+        const Real lii = l[i * m + i];
+        if (!(lii > kZero)) return kZero;
+        log_det += kTwo * std::log(lii);
+    }
+    const Real log_two_pi = static_cast<Real>(1.8378770664093454836);
+    const Real exponent = -(d + log_det + static_cast<Real>(m) * log_two_pi) / kTwo;
+    // Guard the exponential: a model that fits terribly must return 0, not a
+    // denormal that later divides into something.
+    if (exponent < static_cast<Real>(-700)) return kZero;
+    return std::exp(exponent);
+}
+
 bool track_update(Track& track, const Measurement& z, const TrackerConfig& cfg) noexcept {
     if (!track.live()) return false;
     const Real r = track.state.range_m();

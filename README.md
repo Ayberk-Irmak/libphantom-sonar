@@ -5,7 +5,7 @@ Zero dependencies, zero heap allocation, C++20.
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 ![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)
-![Status](https://img.shields.io/badge/status-v0.10%20fusion-orange.svg)
+![Status](https://img.shields.io/badge/status-v0.11%20real%20data-orange.svg)
 ![Validated](https://img.shields.io/badge/validated-vs%20Bellhop-brightgreen.svg)
 
 ![Munk deep sound channel propagation](data/munk_rays.png)
@@ -508,11 +508,84 @@ tells you the code did not change. These tell you it is right:
 | FFT correlation vs direct O(N·L) correlation | 1.1e-15 relative |
 | Matched filter peak, width, coherent gain | `A·E/2`, `1/B`, `L/2` — all matched |
 | Waveform classification, 4 types at −4.4 dB SNR | 100/100 |
+| Chen-Millero vs the published UNESCO check value | 1731.9954 vs 1731.995 |
+| Chen-Millero vs 220 published table values | 0.0499 m/s worst (table rounds to 0.05) |
+| Ray turning depth vs `c_src/cos θ₀`, real profiles | 186 turns, < 1e-9 m/s |
 
-41044 checks. Clean under GCC 15 and Clang 21 with `-Wconversion -Wsign-conversion
+43259 checks. Clean under GCC 15 and Clang 21 with `-Wconversion -Wsign-conversion
 -Wold-style-cast -Wdouble-promotion -Werror`, and under ASan + UBSan. Passes in
 all four compiler × precision configurations. Zero allocation is proven by `nm` over the
 built archive, not asserted: the library references only libm and `memset`.
+
+## v0.11 — real data, and a coefficient that was wrong for eleven releases
+
+**A published check value found a bug that eleven releases of testing did not.**
+
+Until now the sound-speed equations were verified by mutual agreement: Medwin,
+Mackenzie and Chen-Millero must agree inside their common validity box. They
+agree to about 0.1 m/s — so the check could never see an error worth 0.016 m/s,
+and there was one. `chen_millero()` held Wong & Zhu's (1995) ITS-90 coefficients
+for 40 of its 42 terms and Chen & Millero's 1977 originals for the other two. It
+was neither equation.
+
+Mutual agreement bounds how wrong you can be by how much your methods differ.
+That is not the same as being right. Against the primary source — UNESCO
+Technical Papers in Marine Science 44, p. 48 and p. 50:
+
+```
+published check value  1731.995 m/s   (S=40, T=40 C, p=10000 dbar)
+computed               1731.9954
+
+220 published table values, worst error 0.0499 m/s
+the table is printed to 0.1, so 0.05 is its rounding half-width
+```
+
+Both versions are now implemented properly, and a test proves they are two
+legitimate equations rather than one equation and one typo: converting the
+temperature scale (`t68 = 1.00024 t90`) improves their agreement from 0.0208 to
+**0.0056 m/s**, inside Wong & Zhu's own stated revision size.
+
+**Six real ocean profiles**, fetched from NOAA over OPeNDAP so every number's
+provenance is a URL you can re-fetch:
+
+| site | axis depth | assuming 35 PSU costs |
+|---|---|---|
+| black-sea | 55 m | **20.3 m/s** |
+| levantine | 375 m | 4.7 m/s |
+| aegean | 175 m | 4.7 m/s |
+| n-atlantic | 950 m | 0.8 m/s |
+| eq-pacific | 950 m | 0.6 m/s |
+| norwegian | 850 m | 0.2 m/s |
+
+The Black Sea surface is 18.2 PSU — near-fresh. That 20 m/s error is the same
+size as the entire 24 m/s channel feature there, so assume the usual 35 PSU and
+the channel you trace is not the one that exists.
+
+The shipped descriptions are themselves tested against the shipped data. An
+earlier draft called the Norwegian Sea upward-refracting and put the North
+Atlantic axis at 1100 m; neither survived contact with the profiles.
+
+**An IMM filter**, and an honest account of what it buys. Three models — constant
+velocity, and coordinated turns at ±ω — against a single-model EKF tuned with
+process noise between the IMM's two:
+
+| phase | IMM | single-model EKF | ratio |
+|---|---|---|---|
+| during the turn | 37.31 m | 36.68 m | **0.98×** |
+| after it ends | 25.88 m | 44.53 m | **1.72×** |
+| overall | 44.91 m | 50.74 m | 1.13× |
+
+The gain is in **recovery**, not in the turn — during the manoeuvre the IMM is
+marginally worse. That is not the usual description of an IMM. It costs nothing
+on a straight target (27.40 m vs 27.88 m), so it is not simply more process
+noise in disguise, and `1 − μ_CV` is a manoeuvre detector that comes free: it
+peaks at 0.991 during the turn.
+
+**A test that was measuring itself.** Snell's invariant over real profiles
+reports exactly zero drift — suspicious, not reassuring, since the tracer stores
+ξ and derives θ from it. Replaced with a turning-depth check that is independent
+of how the state is stored: at θ = 0 the sound speed must equal `c_src/cos θ₀`.
+186 turning points across six real profiles, all exact to 1e-9.
 
 ## Measured performance
 

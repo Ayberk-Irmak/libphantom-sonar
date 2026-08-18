@@ -1369,3 +1369,212 @@ Measured on two coherent arrivals at ±6°:
 with subarrays of `L` has the resolution of an `L`-element array: 7.16° falls
 to 11.46° in the case above. Resolving `P` coherent sources needs `L > P`, so
 the caller must choose `L` — the library will not choose it for them.
+
+
+## 17. Real data, and a coefficient that was wrong for eleven releases
+
+### 17.1 Checking against a published value instead of against yourself
+
+Until v0.11 the sound-speed equations were verified by **mutual agreement**:
+Medwin, Mackenzie and Chen-Millero must agree inside their common validity box,
+so a mistyped coefficient breaks the agreement. That argument is weaker than it
+looks. The three equations agree only to about 0.1 m/s, so the check can only
+see errors larger than that — and it had been hiding one worth 0.016 m/s since
+v0.1.
+
+The primary source settles it. UNESCO Technical Papers in Marine Science 44
+(Fofonoff & Millard 1983) publishes both a check value, on p. 48,
+
+```
+Check Value: 1731.995 m/s for S = 40, t = 40 C, p = 10000 decibars
+```
+
+and a full table on p. 50: **220 values** over S = 25/30/35/40 PSU,
+T = 0/10/20/30/40 °C (IPTS-68) and p = 0 … 10000 dbar. Both are now in the test
+suite, transcribed in `tests/data/unesco44_table.hpp`.
+
+### 17.2 What the bug was
+
+`chen_millero()` carried Wong & Zhu's (1995) ITS-90 coefficients for 40 of its
+42 terms, and Chen & Millero's original 1977 values for the other two:
+
+| | 1977 (IPTS-68) | Wong & Zhu (ITS-90) | what the code had |
+|---|---|---|---|
+| `A02` | 7.164e-5 | 7.166e-5 | **7.164e-5** |
+| `A03` | 2.006e-6 | 2.008e-6 | **2.006e-6** |
+
+So it was neither equation, and its header credited Chen & Millero (1977) for
+something that was mostly Wong & Zhu. The fix was not to pick a number but to
+implement **both** equations properly:
+
+* `chen_millero_1977()` — IPTS-68, the version the published check value and
+  table belong to. It reproduces the check value as **1731.9954** against
+  1731.995, and all 220 table entries to a worst error of **0.0499 m/s** — the
+  table is printed to 0.1 m/s, so 0.05 is exactly its rounding half-width. The
+  agreement is as tight as the published data can express.
+* `chen_millero_its90()` — Wong & Zhu (1995), coefficients per NPL. This is the
+  library default, because every measurement taken since 1990 is on ITS-90.
+
+That the two are *legitimately different equations* rather than one equation and
+one mistake is itself tested: feeding the same number to both differs by
+0.0208 m/s, and converting the temperature scale first (`t68 = 1.00024 t90`)
+drops that to **0.0056 m/s**. Wong & Zhu state their revision changes the UNESCO
+equation by "within 0.024 m/s"; the measured 0.0208 sits inside that.
+
+### 17.3 Del Grosso, and where a validity box lies
+
+Del Grosso (1974), in Wong & Zhu's ITS-90 form, is a genuinely independent
+equation — different laboratory, different data, different functional form.
+Comparing it to UNESCO says something about the physics in a way that comparing
+Medwin to Mackenzie does not.
+
+The result depends almost entirely on **where you compare them**:
+
+| region | worst disagreement |
+|---|---|
+| 0 – 1000 m (most sonar work) | 0.41 m/s |
+| 0 – 3000 m | 0.76 m/s |
+| 0 – 6000 m | 0.82 m/s |
+| 0 – 9810 m (Del Grosso's limit) | 1.33 m/s |
+| full nominal validity box | **3.93 m/s** |
+
+The last row is 26 °C water under 1000 bar. No such sea exists, neither equation
+was ever fitted to a sample of one, and they extrapolate apart. A validity box
+is a rectangle in (S, T, P) and the ocean is not a rectangle — quoting a
+disagreement over the whole box measures the corners, not the water.
+
+Worth noting against Chen & Millero's own quoted standard deviation of
+0.19 m/s: in the top kilometre two independent equations differ by about twice
+the uncertainty either claims. That is the real accuracy of "the speed of sound
+in seawater".
+
+### 17.4 Real profiles
+
+Six World Ocean Atlas 2023 profiles (`data/profiles/`, fetched by
+`tools/fetch_woa_profiles.py` from NOAA NCEI over OPeNDAP, one grid cell each):
+
+| site | max depth | c surface | c axis | axis depth |
+|---|---|---|---|---|
+| aegean | 650 m | 1522.1 | 1514.4 | 175 m |
+| black-sea | 2200 m | 1486.9 | 1462.6 | 55 m |
+| eq-pacific | 4300 m | 1539.1 | 1484.9 | 950 m |
+| levantine | 2400 m | 1530.6 | 1516.1 | 375 m |
+| n-atlantic | 4700 m | 1509.0 | 1486.3 | 950 m |
+| norwegian | 3200 m | 1477.4 | 1463.7 | 850 m |
+
+These are a **climatology**, not casts: a decadal average over a 1° cell, with no
+eddy, internal wave or diurnal layer surviving the averaging. They have the
+*shape* of real water, which is what the tests need, and they should not be used
+to predict a real range.
+
+The Black Sea earns its place. Its surface is 18.2 PSU — near-fresh — so
+assuming the usual 35 PSU makes a **20.3 m/s** error there against at most
+4.7 m/s at any other site. For scale, the entire channel excess measured at that
+site is 24 m/s: the error is the size of the feature, so the channel you would
+trace is not the channel that is there.
+
+### 17.5 What real profiles test that Munk cannot
+
+Munk is analytic and smooth. A real profile is piecewise linear between standard
+levels with a kink at every one. Two checks run over all six:
+
+**Snell's invariant** `ξ = cos θ / c` comes out at exactly zero drift — which
+should be *suspicious rather than reassuring*. The tracer carries ξ and
+reconstructs θ from it as `θ = ±acos(ξc)`, so measuring `cos θ / c` largely
+measures whether `acos` and `cos` round-trip. It catches a ray that jumps layers
+wrongly; it cannot catch a ray that turns in the wrong *place*.
+
+**Turning depth** can, and is independent of how θ is stored. At a turning point
+θ = 0, so the local sound speed must equal `c_source / cos θ₀`. Over 186 turning
+points across the six profiles the worst error is **below 1e-9 m/s**: the tracer
+cuts the arc exactly at the turn rather than stepping past it and interpolating.
+
+## 18. Interacting multiple models
+
+A constant-velocity filter has two ways to handle a turn, both bad. Quiet
+process noise: it lags the manoeuvre, the innovations blow past the gate, and
+the track dies on a target that is plainly still there. Loud process noise: it
+follows the turn, and spends the other 95% of the time chasing measurement noise.
+
+The IMM refuses the choice. Three models share the four-state Cartesian vector:
+
+```
+0   constant velocity,       sigma_a = 0.3 m/s^2
+1   coordinated turn at +w,  sigma_a = 2.0 m/s^2
+2   coordinated turn at -w,  sigma_a = 2.0 m/s^2
+```
+
+A coordinated turn at *known* rate is linear in that same state, which is why no
+augmentation is needed:
+
+```
+        [ 1  0   sin(wT)/w   -(1-cos(wT))/w ]
+F(w,T) = [ 0  1  (1-cos(wT))/w   sin(wT)/w  ]
+        [ 0  0    cos(wT)       -sin(wT)    ]
+        [ 0  0    sin(wT)        cos(wT)    ]
+```
+
+At `w = 0` this is exactly the constant-velocity matrix, but `sin(wT)/w` is 0/0
+there, so below `|wT| < 1e-4` the implementation switches to the series. That is
+not an approximation to the answer; it is the more accurate way to compute it.
+A test walks `w` down through the crossover and requires monotone convergence —
+in `double` the difference falls as 6.946e-N with no jump at the threshold.
+
+### 18.1 The four steps
+
+**Mixing.** Before each model predicts, its state is replaced by a blend of all
+models' states, weighted by `μ_{i|j} = π_ij μ_i / c_j`. This is what makes an
+IMM more than a bank of independent filters: a model that has been idle starts
+from somewhere sensible when it takes over. The mixed covariance carries a
+spread-of-means term,
+
+```
+P0_j = sum_i mu_{i|j} [ P_i + (x_i - x0_j)(x_i - x0_j)^T ]
+```
+
+and dropping that outer product makes the filter overconfident exactly when the
+models disagree — which is exactly when it should not be.
+
+**Filtering.** Each model runs the ordinary EKF measurement update.
+
+**Re-weighting.** `μ_j ∝ c_j Λ_j` with the Gaussian likelihood
+
+```
+L = exp(-d^2/2) / sqrt( (2 pi)^m |S| )
+```
+
+The `|S|` term is not decoration. Without it a model could win on residual
+simply by being vaguer; `|S|` is what charges it for that. It comes free from
+the Cholesky factor already computed for the NIS, as `|S| = (prod L_ii)^2`.
+
+**Combination.** The same mixture formula again, producing the output estimate.
+
+### 18.2 What it is worth, split by phase
+
+A target turning at 3 °/s between scans 15 and 35, against a single-model EKF
+tuned with process noise *between* the IMM's two:
+
+| phase | IMM | single-model EKF | ratio |
+|---|---|---|---|
+| during the turn | 37.31 m | 36.68 m | **0.98×** |
+| after it ends | 25.88 m | 44.53 m | **1.72×** |
+| overall | 44.91 m | 50.74 m | 1.13× |
+
+**The gain is in recovery, not in the turn.** During the manoeuvre both filters
+lag and the single model's larger process noise partly covers for it — the IMM
+is marginally *worse*. Afterwards the IMM switches back to a quiet model within
+a scan or two while the EKF is still coasting on the velocity the turn left it
+with. That asymmetry is the honest description of what an IMM buys, and it is
+not the description usually given.
+
+On a straight target it costs nothing: 27.40 m against 27.88 m.
+
+### 18.3 The manoeuvre detector that comes free
+
+`1 − μ_CV` is a manoeuvre probability the filter had to compute anyway for the
+mixing. It peaks at **0.991** during the turn, and the probability-weighted turn
+rate recovers the direction correctly (truth ±3 °/s → estimate ±2.0…2.3 °/s).
+
+That estimate is *not* a measurement of turn rate. With models at 0 and ±ω it
+can only return a value in [−ω, +ω], and a target turning harder saturates it.
+Read it as "which way, and roughly how hard".

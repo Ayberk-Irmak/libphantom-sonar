@@ -109,6 +109,30 @@ jobs:
           fi
           echo "clean: no allocator symbols referenced"
 
+  generated-data:
+    name: Generated test data is reproducible
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: UNESCO table reproduces the published equation, and its header
+        # The table is transcribed by hand from a SCANNED 1983 document with no
+        # text layer, so the transcription needs verifying. The generator
+        # evaluates the separately-entered published coefficients against every
+        # transcribed value and fails on any outlier -- which is what a slipped
+        # digit looks like. Then it regenerates the header, and the diff proves
+        # nobody has hand-edited a value into the committed copy.
+        run: |
+          set -e
+          python3 tools/make_unesco_table.py /tmp/unesco.hpp
+          diff -u tests/data/unesco44_table.hpp /tmp/unesco.hpp
+
+      - name: Profile header matches the shipped CSVs
+        run: |
+          set -e
+          python3 tools/make_profile_header.py data/profiles /tmp/profiles.hpp
+          diff -u tests/data/woa_profiles.hpp /tmp/profiles.hpp
+
   static-analysis:
     name: cppcheck
     runs-on: ubuntu-latest

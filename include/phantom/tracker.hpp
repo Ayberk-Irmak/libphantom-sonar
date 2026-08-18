@@ -176,6 +176,17 @@ std::size_t tracker_step(std::span<Track> tracks,
 // large fraction of them.
 [[nodiscard]] std::size_t count_established(std::span<const Track> tracks) noexcept;
 
+// Gaussian likelihood of a measurement given a predicted track:
+//
+//   L = exp(-d^2/2) / sqrt( (2 pi)^m |S| )
+//
+// where d^2 is the NIS and S the innovation covariance. Returns 0 for a
+// degenerate track. This is what an IMM weighs its models by -- the NIS alone
+// is not enough, because a model can win on residual simply by being vaguer,
+// and the |S| term is what charges it for that.
+[[nodiscard]] Real measurement_likelihood(const Track& track, const Measurement& z,
+                                          const TrackerConfig& cfg) noexcept;
+
 // Chi-square quantile for choosing a gate.
 //
 // 2 dof inverts in closed form (the CDF is 1 - exp(-x/2), so x = -2 ln(1-p)).
