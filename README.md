@@ -5,7 +5,7 @@ Zero dependencies, zero heap allocation, C++20.
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 ![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)
-![Status](https://img.shields.io/badge/status-v0.15%20air%20bench-orange.svg)
+![Status](https://img.shields.io/badge/status-v0.16%20measurement-orange.svg)
 ![Validated](https://img.shields.io/badge/validated-vs%20Bellhop-brightgreen.svg)
 
 ![Munk deep sound channel propagation](data/munk_rays.png)
@@ -816,6 +816,53 @@ recovers a simulated direct path at 1.500 ms (truth 1.500) and an echo at
 already documents the trap: the measured delay includes the sound card's
 10–50 ms latency, which dwarfs the 1.5 ms sound takes to cross half a metre. Only
 a two-distance measurement removes it.
+
+## v0.16 — turning a recording into a measurement
+
+v0.15 built an air bench and could not run it: this machine has no working
+acoustic path. **How that was found matters more than the fact of it.**
+
+It was not found by looking at the recording. The recording looked fine — 13000
+distinct sample values, a healthy RMS, a matched filter peak 44 dB above
+background. Every one of those is what a working microphone gives, and every one
+was electrical noise and a startup transient. What settled it was a *controlled*
+comparison: record while playing, record in silence, difference the in-band
+energy. The answer came out **negative** — playing made it quieter, which no
+working channel can do.
+
+So this release is the apparatus that comparison implies.
+
+**Qualification, before any number is taken:**
+
+| channel | excess | clipped | verdict |
+|---|---|---|---|
+| carrying the probe | +18.92 dB | 0% | **usable** |
+| carrying nothing | −0.27 dB | 0% | unusable |
+| carrying it, loudly | +31.26 dB | 18.24% | **unusable** |
+
+The third row is the one worth having. It passes the "is the signal there" check
+by a wide margin and is rejected anyway, because a clipping recording reports
+levels that are fiction.
+
+**Two distances cancel the sound card.** A delay measured over a desk is almost
+entirely buffering — 10–50 ms of it against 1.5 ms of flight time over half a
+metre:
+
+| | |
+|---|---|
+| naive single-shot `d1/t1` | **12.1 m/s** — out by 28× |
+| two-distance solve | **343.37 m/s**, latency **32.00 ms** |
+
+**Impulse response by regularised deconvolution**, against three known arrivals
+at 200/320/512 samples: recovered exactly, at −6.03 dB and −12.06 dB against
+truths of −6.02 and −12.04. The regularisation is not a refinement — without it
+the division by a probe's near-zero out-of-band spectrum amplifies noise without
+bound, and the result still looks like an impulse response.
+
+**Still not measured.** No number in this project comes from a real transducer.
+This is the apparatus, verified against channels whose answers are known by
+construction. The qualification step is what will decide whether a real setup
+can produce a number worth having.
 
 ## Measured performance
 

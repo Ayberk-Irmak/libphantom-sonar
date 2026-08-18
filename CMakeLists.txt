@@ -2,7 +2,7 @@
 cmake_minimum_required(VERSION 3.20)
 
 project(phantom-sonar
-        VERSION 0.15.0
+        VERSION 0.16.0
         DESCRIPTION "Real-time ocean acoustics, ray tracing and sonar pulse analysis"
         LANGUAGES CXX)
 
@@ -87,7 +87,8 @@ add_library(phantom_sonar
     src/ctrv.cpp
     src/comm.cpp
     src/c_api.cpp
-    src/air.cpp)
+    src/air.cpp
+    src/bench.cpp)
 add_library(phantom::sonar ALIAS phantom_sonar)
 
 target_include_directories(phantom_sonar

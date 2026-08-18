@@ -40,7 +40,7 @@ static int g_checks = 0;
 static void test_version_and_precision(void) {
     printf("  version %s (%d), Real is %s\n", ph_version_string(), ph_version(),
            ph_real_is_double() ? "double" : "float");
-    CHECK(ph_version() >= 1500);
+    CHECK(ph_version() >= 1600);
     /* The check every C caller should make at startup: a library built with a
      * different Real than the caller assumed reinterprets every number crossing
      * the boundary, which produces plausible nonsense rather than a crash. */

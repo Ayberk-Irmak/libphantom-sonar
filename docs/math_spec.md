@@ -2116,3 +2116,102 @@ Two limitations are stated in the tool itself rather than left to be discovered:
   dwarfs the 1.5 ms sound takes to cross half a metre. The only reliable removal
   is a two-distance measurement: the *difference* of two delays cancels every
   fixed electronic latency and leaves the acoustics.
+
+
+## 23. Turning a recording into a measurement
+
+v0.15 built an air bench and could not run it: the development machine has no
+working acoustic path. **How that was found matters more than the fact of it**,
+and this section is the machinery that came out of it.
+
+It was not found by looking at a recording and judging it. The recording looked
+fine — 13000 distinct sample values, a healthy RMS, a matched filter peak 44 dB
+above the background. Every one of those is what a working microphone gives, and
+every one was produced by electrical noise and a startup transient. What settled
+it was a **controlled comparison**: record while playing, record in silence,
+difference the in-band energy. The answer came out **negative** — playing made
+it quieter — which no working channel can do.
+
+### 23.1 Qualification, before any number is taken
+
+```
+excess = 10 log10( E_band(active) / E_band(silent) )
+```
+
+Both recordings must come from the same device at the same gain, made close
+together. The method rests entirely on the probe being the only difference, so a
+gain change between them invalidates it silently.
+
+Three cases, all tested:
+
+| channel | excess | clipped | verdict |
+|---|---|---|---|
+| carrying the probe | +18.92 dB | 0% | **usable** |
+| carrying nothing | −0.27 dB | 0% | unusable |
+| carrying it, loudly | +31.26 dB | 18.24% | **unusable** |
+
+The third row is the one worth having. It passes on excess by a wide margin and
+is rejected anyway, because a clipping recording reports levels that are
+fiction. A qualifier that only checked "is the signal there" would wave it
+through.
+
+The band energy is measured through a Hann window. Without one, spectral leakage
+from a loud out-of-band transient lands squarely in the band being measured —
+which is precisely how a startup click passes for signal.
+
+### 23.2 Two distances cancel the sound card
+
+A delay measured over a desk is almost entirely sound-card buffering:
+
+```
+t1 = d1/c + L
+t2 = d2/c + L      =>   c = (d2 - d1)/(t2 - t1),   L = t1 - d1/c
+```
+
+With `L = 32 ms`, `c = 343.37 m/s`, and distances of 0.40 m and 1.60 m:
+
+| | |
+|---|---|
+| naive single-shot `d1/t1` | **12.1 m/s** — out by 28× |
+| two-distance solve | **343.37 m/s**, latency **32.00 ms** |
+
+Both recovered exactly. The subtraction is the whole method: `L` is 10–50 ms
+against 1.5 ms of flight time over half a metre, so one measurement is 97%
+latency and two are not.
+
+The solver refuses distances too close to resolve rather than dividing by a
+difference that is mostly timing noise.
+
+### 23.3 Impulse response by regularised deconvolution
+
+```
+H = conj(S) R / (|S|^2 + eps * mean|S|^2)
+```
+
+The regularisation is not a refinement. A probe has almost no energy outside its
+own band, so dividing by `|S|^2` there amplifies whatever noise is present
+without bound — and the result still looks like an impulse response. The floor
+is set as a fraction of the probe's own mean power rather than an absolute
+constant, so the estimate does not depend on the recording's gain.
+
+Verified against a channel with known arrivals — three paths at 200, 320 and 512
+samples with gains 1.0, 0.5, 0.25:
+
+| found | sample | truth | relative |
+|---|---|---|---|
+| 0 | 200.0 | 200 | 0.00 dB |
+| 1 | 320.0 | 320 | −6.03 dB (truth −6.02) |
+| 2 | 512.0 | 512 | −12.06 dB (truth −12.04) |
+
+Arrival picking uses a separation guard of a few times the probe's own
+resolution `1/B` and no more. v0.15's bench used 20 ms, which is seven metres of
+extra path and discarded every echo a desk produces — the direct path and its
+first reflection are typically 2–4 ms apart.
+
+### 23.4 What is still not measured
+
+Nothing in this project has yet been measured against a real transducer. This
+section is the apparatus for doing so, verified against simulated channels whose
+answers are known. The first genuinely *measured* number waits for hardware that
+works; the qualification step above is what will decide whether a given setup
+can produce one.

@@ -165,6 +165,85 @@ def simulate(delay_s=0.0015, snr_db=10.0, echo_s=0.004, echo_db=-8.0, seed=7):
     return [amp * v + rng.gauss(0, 1) for v in sig]
 
 
+def band_energy_db(x, fs, lo=F0, hi=F1):
+    import numpy as np
+    n = 4096
+    tot, blocks = 0.0, 0
+    for start in range(0, max(0, len(x) - n) + 1, n // 2):
+        seg = np.array(x[start:start + n]) * np.hanning(n)
+        F = np.abs(np.fft.rfft(seg))
+        f = np.fft.rfftfreq(n, 1 / fs)
+        tot += float(np.sum(F[(f >= lo) & (f <= hi)] ** 2))
+        blocks += 1
+    return 10 * math.log10(max(tot / max(blocks, 1), 1e-30))
+
+
+def qualify(active, silent, fs, min_excess_db=6.0, max_clipped=0.001):
+    """Decide whether a channel carries the probe at all.
+
+    This is the step that matters most and is easiest to skip. A dead channel
+    does not look dead: the recording that prompted this had thousands of
+    distinct sample values, a healthy RMS and a matched-filter peak 44 dB above
+    background, and all of it was electrical noise and a startup transient.
+    Only comparing against a SILENT recording of the same setup settles it."""
+    a = band_energy_db(active, fs)
+    s = band_energy_db(silent, fs)
+    clipped = sum(1 for v in active if abs(v) >= 0.9999) / max(len(active), 1)
+    ok = (a - s) >= min_excess_db and clipped <= max_clipped
+    return {"active_db": a, "silent_db": s, "excess_db": a - s,
+            "clipped_fraction": clipped, "usable": ok}
+
+
+def two_distance_solve(d1, t1, d2, t2, resolution_s=1e-5):
+    """Recover the sound speed and the fixed electronic latency from two
+    measurements. A single delay over a desk is 97% sound-card buffering."""
+    dd, dt = d2 - d1, t2 - t1
+    if abs(dt) <= resolution_s or dd == 0:
+        return None
+    c = dd / dt
+    if c <= 0:
+        return None
+    return {"sound_speed_mps": c, "fixed_latency_s": t1 - d1 / c}
+
+
+def cmd_qualify(args):
+    active, fs = read_wav(args.active)
+    silent, fs2 = read_wav(args.silent)
+    if fs != fs2:
+        raise SystemExit("the two recordings must share a sample rate")
+    r = qualify(active, silent, fs)
+    print("  in-band energy with the probe playing : %+.2f dB" % r["active_db"])
+    print("  in-band energy in silence             : %+.2f dB" % r["silent_db"])
+    print("  excess attributable to the probe      : %+.2f dB" % r["excess_db"])
+    print("  samples at full scale                 : %.3f %%" % (100 * r["clipped_fraction"]))
+    print()
+    if r["usable"]:
+        print("  USABLE: the channel carries the probe and is not clipping.")
+        return 0
+    if r["excess_db"] < 6:
+        print("  UNUSABLE: the probe is not reaching the microphone. A negative or")
+        print("  near-zero excess means playing changed nothing measurable, and no")
+        print("  delay or level taken from this setup means anything.")
+    else:
+        print("  UNUSABLE: the probe arrives but the recording is clipping, so every")
+        print("  level it reports is fiction. Reduce the capture gain and repeat.")
+    return 1
+
+
+def cmd_twodist(args):
+    r = two_distance_solve(args.d1, args.t1 / 1000.0, args.d2, args.t2 / 1000.0)
+    if r is None:
+        print("  the two measurements are not far enough apart to resolve anything")
+        return 1
+    print("  sound speed    : %.2f m/s" % r["sound_speed_mps"])
+    print("  fixed latency  : %.2f ms" % (1000 * r["fixed_latency_s"]))
+    expected = sound_speed(args.temperature, args.humidity)
+    print("  expected at %.1f C, %.0f%% RH: %.2f m/s (%.2f%% away)"
+          % (args.temperature, args.humidity, expected,
+             100 * abs(r["sound_speed_mps"] - expected) / expected))
+    return 0
+
+
 def cmd_selftest(args):
     print("Simulated channel: direct path at 1.50 ms, echo at 4.00 ms (-8 dB), SNR 10 dB")
     rec = simulate()
@@ -181,6 +260,40 @@ def cmd_selftest(args):
         print("  FAIL: the echo was not resolved")
         return 1
     print("  PASS: direct path and echo both resolved")
+
+    print()
+    print("Channel qualification (simulated):")
+    import random
+    rng = random.Random(3)
+    noise = [0.02 * rng.gauss(0, 1) for _ in range(int(0.3 * FS))]
+    c = chirp()
+    live = list(noise)
+    for i, v in enumerate(c):
+        live[500 + i] += 0.3 * v
+    dead = [0.02 * rng.gauss(0, 1) for _ in range(int(0.3 * FS))]
+    q_live = qualify(live, noise, FS)
+    q_dead = qualify(dead, noise, FS)
+    print("  channel carrying the probe: excess %+.2f dB -> %s"
+          % (q_live["excess_db"], "USABLE" if q_live["usable"] else "unusable"))
+    print("  channel carrying nothing  : excess %+.2f dB -> %s"
+          % (q_dead["excess_db"], "USABLE" if q_dead["usable"] else "unusable"))
+    if not q_live["usable"] or q_dead["usable"]:
+        print("  FAIL: qualification did not separate the two")
+        return 1
+
+    print()
+    print("Two-distance latency cancellation (simulated):")
+    c_true, lat = sound_speed(20.0, 0.0), 0.032
+    t1, t2 = 0.40 / c_true + lat, 1.60 / c_true + lat
+    r = two_distance_solve(0.40, t1, 1.60, t2)
+    print("  naive single-shot speed d1/t1 = %.1f m/s (out by %.0fx)"
+          % (0.40 / t1, c_true / (0.40 / t1)))
+    print("  two-distance solve: c = %.2f m/s (truth %.2f), latency %.2f ms (truth 32.00)"
+          % (r["sound_speed_mps"], c_true, 1000 * r["fixed_latency_s"]))
+    if abs(r["sound_speed_mps"] - c_true) > 0.01 or abs(r["fixed_latency_s"] - lat) > 1e-6:
+        print("  FAIL: the two-distance solve did not recover the truth")
+        return 1
+    print("  PASS: qualification and latency cancellation both verified")
     return 0
 
 
@@ -241,6 +354,18 @@ def main():
     s = sub.add_parser("analyse", help="analyse a recording")
     s.add_argument("input")
     s.set_defaults(func=cmd_analyse)
+
+    s = sub.add_parser("qualify", help="is this channel carrying the probe at all?")
+    s.add_argument("active", help="recording made WHILE the probe played")
+    s.add_argument("silent", help="recording of the same setup in silence")
+    s.set_defaults(func=cmd_qualify)
+
+    s = sub.add_parser("twodist", help="cancel the sound card latency using two distances")
+    s.add_argument("--d1", type=float, required=True, help="first distance, m")
+    s.add_argument("--t1", type=float, required=True, help="first measured delay, ms")
+    s.add_argument("--d2", type=float, required=True, help="second distance, m")
+    s.add_argument("--t2", type=float, required=True, help="second measured delay, ms")
+    s.set_defaults(func=cmd_twodist)
 
     s = sub.add_parser("live", help="play and record on this machine")
     s.add_argument("--device", default="default")

@@ -1321,7 +1321,54 @@ Two limitations hold even on working hardware, and are stated in the tool:
   against 1.5 ms of flight time over half a metre. Only a two-distance
   measurement removes it, because the difference cancels fixed electronic delay.
 
-## 20. Build and runtime hygiene ✅
+## 20. Turning a recording into a measurement — verified ✅
+
+### Qualification catches what inspection does not
+
+| channel | excess | clipped | verdict |
+|---|---|---|---|
+| carrying the probe | +18.92 dB | 0% | **usable** |
+| carrying nothing | −0.27 dB | 0% | unusable |
+| carrying it, clipping | +31.26 dB | 18.24% | **unusable** |
+
+The third row earns the test: it passes the signal check by a wide margin and is
+rejected anyway. A qualifier that only asked "is the probe there" would accept a
+recording whose every level is fiction.
+
+This exists because v0.15's dead channel did not look dead — thousands of
+distinct sample values, healthy RMS, a matched-filter peak 44 dB above
+background, all of it electrical noise. Only the A/B comparison against a silent
+recording settled it, and it came out **negative**.
+
+### Two-distance latency cancellation
+
+Truth: c = 343.37 m/s, fixed latency 32.0 ms, distances 0.40 m and 1.60 m.
+
+| | |
+|---|---|
+| naive single-shot `d1/t1` | 12.1 m/s (28× wrong) |
+| two-distance solve | **343.37 m/s**, **32.00 ms** |
+
+Both exact. The solver refuses under-separated distances rather than dividing by
+timing noise.
+
+### Impulse response
+
+Three known paths at 200/320/512 samples, gains 1.0/0.5/0.25, recovered at
+200.0/320.0/512.0 with −6.03 dB and −12.06 dB against truths of −6.02 and
+−12.04.
+
+The arrival picker's separation guard is now a few times the probe resolution
+`1/B`. v0.15's tool used 20 ms — seven metres of extra path — and silently
+discarded every echo a room produces.
+
+### Still not measured
+
+**No number in this document comes from a real transducer.** §19 records why the
+development machine cannot produce one; this section is the apparatus, verified
+against channels whose answers are known by construction.
+
+## 21. Build and runtime hygiene ✅
 
 | Configuration | Result |
 |---|---|
@@ -1360,7 +1407,7 @@ layers:
 acceptable if you are differencing travel times for ranging. Use `double` unless
 your FPU forces otherwise.
 
-## 21. Performance (measured, not claimed)
+## 22. Performance (measured, not claimed)
 
 13th Gen Intel Core i7-13620H, `-O3`, single thread:
 
@@ -1400,7 +1447,7 @@ actually constrains a control loop, and measures **52 ns**. Re-run
 guarantee; these numbers are not a substitute for WCET analysis on the target
 silicon.
 
-## 22. Self-consistent but NOT independently verified ⚠️
+## 23. Self-consistent but NOT independently verified ⚠️
 
 - **Chapman-Harris surface backscatter coefficients.** The formula is written
   out in the header so a reader can check it, and its behaviour is verified
@@ -1421,7 +1468,7 @@ silicon.
 - **Real measured T/S profiles.** Everything so far uses analytic profiles
   (Munk, linear, isovelocity). Feeding World Ocean Atlas / Argo data is v0.2.
 
-## 23. Known limitations — not bugs, scope ⚠️
+## 24. Known limitations — not bugs, scope ⚠️
 
 - **Shadow fraction depends on ray density.** Gaps between adjacent rays read as
   shadow. Measured convergence for the 100 km Munk case on a 500×250 grid:
@@ -1451,7 +1498,7 @@ silicon.
   frequency-dependent.
 - **2-D (range–depth) only.** No azimuthal coupling or out-of-plane refraction.
 
-## 24. Not implemented in v0.15
+## 25. Not implemented in v0.16
 
 `BioMimeticCommEngine` is not in this release. See `docs/roadmap.md`.
 

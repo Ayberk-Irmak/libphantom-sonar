@@ -281,7 +281,7 @@ The third engine of the original specification, and the last real gap.
       provided but this environment's arm-none-eabi has no C++ standard
       library, so it is UNTESTED and labelled so rather than claimed.
 
-## v0.15 — Air acoustics, and the bench ✅ *(current)*
+## v0.15 — Air acoustics, and the bench ✅
 
 Hardware in the loop, started in the medium anyone can test in. A hydrophone and
 a projector cost several hundred euros and need water; a speaker and a
@@ -313,15 +313,47 @@ at 1500.
       tool is written and self-verified; a real measurement waits for a machine
       with a working speaker and microphone.
 
-## v0.16 — A measured channel
+## v0.16 — The apparatus for a measured channel ✅ *(current)*
 
-- [ ] Run `air_bench.py` on hardware that works. The two-distance protocol
-      removes the sound card's latency; agreement with a tape measure to a few
-      centimetres would be the first number in this project measured rather than
-      computed.
-- [ ] Room impulse response from the same recordings, and the multipath model
-      of v0.4 compared against it.
-- [ ] Then, and only then, wet hardware: hydrophone, projector, amplifier.
+v0.15 could not run its bench: this machine has no working acoustic path. How
+that was FOUND turned out to matter more than the fact of it, and this release
+is the machinery that came out of it.
+
+- [x] **Channel qualification.** The dead channel did not look dead -- thousands
+      of distinct sample values, a healthy RMS, a matched-filter peak 44 dB
+      above background, all of it electrical noise and a startup transient. Only
+      an A/B comparison against a SILENT recording settled it, and it came out
+      negative. Now automated, and it rejects three cases: a channel carrying
+      nothing (-0.27 dB), and -- the row that earns the test -- a channel
+      carrying the probe loudly but CLIPPING (+31.26 dB excess, 18% clipped,
+      rejected anyway, because its levels are fiction).
+- [x] **Two-distance latency cancellation.** A delay measured over a desk is
+      97% sound-card buffering: the naive single-shot speed comes out at
+      12.1 m/s, 28x wrong. Differencing two distances recovers c = 343.37 m/s
+      and the 32.00 ms latency exactly.
+- [x] **Impulse response by regularised deconvolution**, verified against three
+      known arrivals: 200/320/512 samples recovered exactly, -6.03 and
+      -12.06 dB against truths of -6.02 and -12.04. The regularisation is not
+      optional -- without it the division by a probe's near-zero out-of-band
+      spectrum amplifies noise without bound while still looking like a
+      response.
+- [x] **A separation guard sized to the probe.** v0.15's arrival picker used
+      20 ms, which is seven metres of extra path and discarded every echo a room
+      produces.
+- [ ] **A real measurement: still not done**, and every document says so. No
+      number in this project has been measured against a transducer.
+
+## v0.17 — The first measured number
+
+Needs hardware this machine does not have; a ~10 EUR USB microphone opens it.
+
+- [ ] Qualify a real setup, then run the two-distance protocol and compare the
+      recovered sound speed with the room thermometer. Agreement to a percent
+      would be the first number here measured rather than computed.
+- [ ] A real room impulse response, and the multipath model of v0.4 compared
+      against it -- the first test of the physics against something that was
+      not simulated.
+- [ ] Then wet hardware: hydrophone, projector, amplifier.
 
 ## Explicitly out of scope
 
