@@ -1081,13 +1081,114 @@ two targets turning in opposite directions, 40 scans -> 2 established tracks
 
 M-of-N confirmation survives the swap from a single filter to a mixture.
 
-## 17. Build and runtime hygiene ✅
+## 17. Spread-spectrum communication — verified ✅
+
+### PN sequences, measured not trusted
+
+Every degree from 5 to 15: balance exactly +1, periodic autocorrelation exactly
+−1 at every non-zero shift (0.0e+00 deviation). Those two properties are what a
+maximal sequence has and a short cycle does not.
+
+The first tap table used the wrong convention for a right-shifting LFSR, leaving
+bit 0 clear. A seed of 1 fed back zero, the state collapsed to all-zeros on the
+first step, and the generator emitted a constant — with the correct *length*.
+Only these two measurements caught it.
+
+### Processing gain: the claim this release got wrong first
+
+**Against white noise at fixed energy per bit, spreading buys nothing.** Measured
+with amplitude scaled as `1/√N`:
+
+| chips | 31 | 63 | 127 | 255 | 511 |
+|---|---|---|---|---|---|
+| output SNR | 13.33 | 12.46 | 13.63 | 13.72 | 12.94 dB |
+
+Flat to 0.87 dB over a 16× range.
+
+The first version of this test held the chip **amplitude** fixed while sweeping
+N, and reported 12.17 dB against a theoretical 12.17 dB — exact agreement, and
+meaningless. Energy per bit is `A²·N·T_chip`, so that sweep multiplied the
+transmitted energy by N and reported the result as processing gain. Both sides
+of the comparison were the same tautology, which is why they matched perfectly.
+
+This is the third measurement in this project to fail by being compared against
+itself, after the sound-speed equations (§14) and the Snell invariant (§15).
+
+**Where the gain is real: bandwidth expansion at fixed data rate.** Data rate
+held at 100 bps, chip rate grown with N so the bandwidth grows and the energy
+per bit does not:
+
+| chips | chip rate | white noise | narrowband tone |
+|---|---|---|---|
+| 31 | 3.1 kHz | 21.98 dB | 11.82 dB |
+| 511 | 51.1 kHz | 21.28 dB | **18.91 dB** |
+
+White noise flat to 0.75 dB; the tone gains **+7.1 dB**, against an ideal 12.2.
+The shortfall is real and explained: a bare correlator collects the diluted
+interferer from the whole band, where `10 log10(N)` assumes a filter matched to
+the data bandwidth after despreading.
+
+A trap in the module's own API is documented at the point of use: raising
+`chips_per_bit` at a fixed chip rate does not spread anything, it trades data
+rate for integration time.
+
+### The Doppler ceiling on processing gain
+
+Chip slip at 1500 m/s sound speed, and the longest code holding it under a
+quarter chip:
+
+| speed | longest code | gain available |
+|---|---|---|
+| 1 m/s | 375 chips | 25.7 dB |
+| 3 m/s | 125 chips | 21.0 dB |
+| 10 m/s | 37 chips | 15.7 dB |
+
+Speed caps the achievable gain, and no transmit power lifts that cap.
+
+### HFM vs LFM under Doppler
+
+Correlation coefficient as a percentage of its own zero-Doppler value, 12 kHz
+sweep, 20 ms:
+
+| speed | LFM | HFM |
+|---|---|---|
+| 10 m/s | 86.0 % | 99.7 % |
+| 20 m/s | **54.8 %** | **99.1 %** |
+
+**Three bugs in this one test**, each producing a plausible answer:
+`render_real_doppler` takes `v/c` not `1 + v/c` (making the baseline a 2×
+compressed pulse, so ratios exceeded 100% — impossible for a matched filter, and
+that is what exposed it); raw peaks compared instead of correlation
+coefficients, so energy differences masqueraded as mismatch; and a lag window
+starting at zero, which missed the *negative* peak shift an upsweep produces.
+
+### Coding, and where the layers hand off
+
+CRC-32 against the published check value: `CRC-32("123456789") = 0xCBF43926`.
+
+RS(15,11) over 4000 codewords with 0–2 symbol errors: **0 left wrong, 0
+uncorrectable**. An 8-bit burst destroying two adjacent symbols is corrected
+exactly.
+
+With 4 errors — beyond `t = 2` — over 3000 codewords:
+
+```
+1836  RS admitted defeat
+ 992  RS miscorrected to a different valid codeword
+        of those, 992 caught by the frame CRC, 0 escaped
+```
+
+Miscorrection is the code's minimum distance (`d = 5`) showing, not a defect,
+and the CRC is the layer that exists to catch it. The two together let nothing
+through in 3000 trials.
+
+## 18. Build and runtime hygiene ✅
 
 | Configuration | Result |
 |---|---|
 | GCC 15.3, `-Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion -Wold-style-cast -Wcast-qual -Wdouble-promotion -Werror` | clean |
 | Clang 21.1, same set | clean |
-| AddressSanitizer + UndefinedBehaviorSanitizer | clean, 43287 checks |
+| AddressSanitizer + UndefinedBehaviorSanitizer | clean, 95806 checks |
 | `Real = float` (`-DPHANTOM_REAL_FLOAT=ON`) | passes, all four compiler × precision configurations |
 | Heap allocations during execution | **zero** — proven by `nm` over the built archive: the library references only libm and `memset` |
 
@@ -1120,7 +1221,7 @@ layers:
 acceptable if you are differencing travel times for ranging. Use `double` unless
 your FPU forces otherwise.
 
-## 18. Performance (measured, not claimed)
+## 19. Performance (measured, not claimed)
 
 13th Gen Intel Core i7-13620H, `-O3`, single thread:
 
@@ -1160,7 +1261,7 @@ actually constrains a control loop, and measures **52 ns**. Re-run
 guarantee; these numbers are not a substitute for WCET analysis on the target
 silicon.
 
-## 19. Self-consistent but NOT independently verified ⚠️
+## 20. Self-consistent but NOT independently verified ⚠️
 
 - **Chapman-Harris surface backscatter coefficients.** The formula is written
   out in the header so a reader can check it, and its behaviour is verified
@@ -1181,7 +1282,7 @@ silicon.
 - **Real measured T/S profiles.** Everything so far uses analytic profiles
   (Munk, linear, isovelocity). Feeding World Ocean Atlas / Argo data is v0.2.
 
-## 20. Known limitations — not bugs, scope ⚠️
+## 21. Known limitations — not bugs, scope ⚠️
 
 - **Shadow fraction depends on ray density.** Gaps between adjacent rays read as
   shadow. Measured convergence for the 100 km Munk case on a 500×250 grid:
@@ -1211,12 +1312,19 @@ silicon.
   frequency-dependent.
 - **2-D (range–depth) only.** No azimuthal coupling or out-of-plane refraction.
 
-## 21. Not implemented in v0.12
+## 22. Not implemented in v0.13
 
 `BioMimeticCommEngine` is not in this release. See `docs/roadmap.md`.
 
 Known gaps within what *is* shipped:
 
+- **No carrier or timing recovery.** The demodulator is GIVEN the carrier
+  phase. Carrier recovery is a real subsystem and this module does not pretend
+  to one; the HFM preamble reveals the time scale but applying it is the
+  caller's job.
+- **No equaliser.** Multipath is modelled elsewhere in the library but the
+  demodulator does not undo it, so the delay spread a real channel imposes is
+  not compensated.
 - **CTRV has no tracker of its own.** `imm_tracker_step()` exists; the
   five-state filter is single-target, and multi-target CTRV tracking is not
   implemented.
@@ -1243,7 +1351,7 @@ Known gaps within what *is* shipped:
 ```bash
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
-./build/phantom_tests          # 43287 checks
+./build/phantom_tests          # 95806 checks
 ./build/phantom_bench          # timing table above
 ./build/munk_simulation data   # CSV + console report
 ./build/ping_intercept data    # streaming ping detection demo

@@ -5,7 +5,7 @@ Zero dependencies, zero heap allocation, C++20.
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 ![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)
-![Status](https://img.shields.io/badge/status-v0.12%20manoeuvre-orange.svg)
+![Status](https://img.shields.io/badge/status-v0.13%20comms-orange.svg)
 ![Validated](https://img.shields.io/badge/validated-vs%20Bellhop-brightgreen.svg)
 
 ![Munk deep sound channel propagation](data/munk_rays.png)
@@ -513,8 +513,11 @@ tells you the code did not change. These tell you it is right:
 | Ray turning depth vs `c_src/cos θ₀`, real profiles | 186 turns, < 1e-9 m/s |
 | CTRV turn rate vs truth, outside the IMM's bracket | 4.99 vs 5.00 °/s |
 | CTRV zero-turn limit vs constant velocity | 8.322e-N, no jump at the series crossover |
+| DSSS vs white noise at fixed Eb (must be flat) | 0.87 dB spread over 16× code length |
+| PN autocorrelation vs −1, degrees 5–15 | 0.0e+00 deviation |
+| CRC-32 vs its published check value | 0xCBF43926 |
 
-43287 checks. Clean under GCC 15 and Clang 21 with `-Wconversion -Wsign-conversion
+95806 checks. Clean under GCC 15 and Clang 21 with `-Wconversion -Wsign-conversion
 -Wold-style-cast -Wdouble-promotion -Werror`, and under ASan + UBSan. Passes in
 all four compiler × precision configurations. Zero allocation is proven by `nm` over the
 built archive, not asserted: the library references only libm and `memset`.
@@ -639,6 +642,80 @@ worst-fitting model cannot veto a measurement the mixture accepts:
 two targets turning opposite ways, 40 scans -> 2 established tracks, signs correct
 367 false alarms over 200 scans             -> 0 established tracks
 ```
+
+## v0.13 — spread-spectrum communication
+
+The third engine of the original specification, and the last real gap. Same
+physics as the rest of the library, used the other way round: where the ping
+analyser pulls a known waveform out of noise to *detect* something, this pulls
+one out of noise to *carry* something.
+
+**Processing gain is narrower than it is usually said to be**, and getting that
+right cost this release a wrong measurement first.
+
+Against **white noise at a fixed energy per bit, spreading buys nothing** —
+despreading multiplies by a ±1 sequence, which leaves white noise unchanged.
+Measured flat to 0.87 dB over a 16× range of code length.
+
+The first version of this test held chip *amplitude* fixed while sweeping N and
+reported 12.17 dB against a theoretical 12.17 dB. Exact agreement, and
+meaningless: energy per bit is `A²·N·T_chip`, so the sweep multiplied transmitted
+energy by N and called the result processing gain. Both sides were the same
+tautology.
+
+Where the gain is real is **bandwidth expansion at a fixed data rate**, against
+narrowband interference. Data rate held at 100 bps, chip rate grown with N:
+
+| chips | chip rate | white noise | narrowband tone |
+|---|---|---|---|
+| 31 | 3.1 kHz | 21.98 dB | 11.82 dB |
+| 511 | 51.1 kHz | 21.28 dB | **18.91 dB** |
+
+White noise flat, as it must be; the tone gains **+7.1 dB**. And covertness —
+the same power over N times the bandwidth is `10 log10(N)` less spectral
+density — is the other half of why anyone spreads.
+
+**What it costs.** At 4 kchip/s, 30 dB of code length is **under 4 bits per
+second**, which is why a covert acoustic link carries status, not data.
+
+**Speed caps the gain, and transmit power cannot lift the cap.** Underwater,
+Doppler is a *time scaling*, not a frequency shift: 1 m/s is 6.7e-4, which
+accumulates into chip slip over a long code.
+
+| speed | longest usable code | gain available |
+|---|---|---|
+| 1 m/s | 375 chips | 25.7 dB |
+| 3 m/s | 125 chips | 21.0 dB |
+| 10 m/s | 37 chips | 15.7 dB |
+
+**Which is why the preamble is hyperbolic.** A time-scaled HFM is still an HFM,
+so it still matches — the peak moves rather than collapsing. Correlation
+coefficient as a percentage of its own zero-Doppler value:
+
+| speed | LFM | HFM |
+|---|---|---|
+| 10 m/s | 86.0 % | 99.7 % |
+| 20 m/s | **54.8 %** | **99.1 %** |
+
+Three separate bugs had to come out of that one measurement before it meant
+anything, and every one produced a believable answer — including ratios above
+100%, which a matched filter cannot produce and which is what exposed the first.
+They are written up in `docs/validation.md §17`.
+
+**Where the coding layers hand off.** RS(15,11) corrects 2 symbol errors with 0
+failures in 4000 trials. Push it to 4 errors and it miscorrects 992 of 3000 to a
+*valid but wrong* codeword — the code's minimum distance showing, not a defect.
+The CRC catches all 992:
+
+```
+1836  RS admitted defeat
+ 992  RS miscorrected to a different valid codeword
+        of those, 992 caught by the frame CRC, 0 escaped
+```
+
+**What it does not do:** carrier phase is *given* to the demodulator, not
+recovered, and there is no equaliser. A few lines of arctangent would not be a
+carrier recovery loop, and the header says so rather than implying otherwise.
 
 ## Measured performance
 

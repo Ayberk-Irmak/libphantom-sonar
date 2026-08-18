@@ -200,7 +200,7 @@ of the next. Joining them is cheaper than any new physics and worth more.
       its state, replacing a Snell-invariant check that was largely measuring
       whether `acos` and `cos` round-trip. 186 turning points, all exact.
 
-## v0.12 — IMM in the tracker, and the turn rate measured ✅ *(current)*
+## v0.12 — IMM in the tracker, and the turn rate measured ✅
 
 - [x] **The IMM wired into a full tracker.** `imm_tracker_step()` carries the
       same global-cost-ordered association and M-of-N management as
@@ -224,18 +224,39 @@ of the next. Joining them is cheaper than any new physics and worth more.
       cheaper than expected -- an extra state costs almost nothing when the
       measurement never moves it.
 
-## v0.13 — Covert acoustic communication
+## v0.13 — Spread-spectrum acoustic communication ✅ *(current)*
 
-- [ ] DSSS modulator/demodulator with configurable chip rate and explicit
-      processing gain `10·log10(N)`
-- [ ] **Doppler-tolerant synchronisation.** In water this dominates: `v/c` with
-      `c ≈ 1500 m/s` means 1 m/s of closing speed is 6.7e-4 — and it is a
-      *time-scaling* of the waveform, not merely a frequency shift. HFM sweeps
-      for the preamble, not LFM.
-- [ ] Multipath-tolerant framing; CRC-32 plus RS(15,11) over GF(16) with static
-      tables
-- [ ] Bio-mimetic waveform shaping (spectral masking against ambient noise and
-      biological transients)
+The third engine of the original specification, and the last real gap.
+
+- [x] **DSSS, with processing gain stated correctly rather than flatteringly.**
+      The first measurement here was WRONG in the project's recurring way: it
+      held chip amplitude fixed while sweeping N, which multiplies energy per
+      bit by N, and reported the resulting 12.17 dB against a theoretical 12.17
+      as a triumph. Both sides were the same tautology. Corrected: against white
+      noise at fixed energy per bit spreading buys NOTHING (flat to 0.87 dB over
+      16x), and the real gain is bandwidth expansion against narrowband
+      interference (+7.1 dB from 31 to 511 chips at a fixed data rate).
+      The link budget is published as a TRADE -- 30 dB at 4 kchip/s is under
+      4 bits per second, which is why a covert link carries status and not data.
+- [x] **PN sequences whose maximality is verified**, degree 5 to 15: balance
+      exactly +1 and autocorrelation exactly -1 at every shift. The first tap
+      table was in the wrong convention and produced a constant with the right
+      LENGTH; only these two measurements caught it.
+- [x] **Doppler as a time scaling**, with the ceiling it puts on processing
+      gain: 10 m/s permits 37 chips and 15.7 dB, and no transmit power lifts
+      that. HFM vs LFM preambles under Doppler measured -- at 20 m/s the HFM
+      holds 99.1% of its correlation and the LFM 54.8%.
+- [x] **CRC-32 verified against its published check value**, and RS(15,11) over
+      GF(16) correcting 2 symbol errors with 0 failures in 4000 trials. Beyond
+      t=2 the two layers were measured TOGETHER: RS miscorrects 992 of 3000
+      four-error words to a valid-but-wrong codeword -- the minimum distance
+      showing, not a defect -- and the CRC catches all 992.
+- [ ] *Deferred:* carrier and chip-timing recovery, and an equaliser. The
+      demodulator is given the carrier phase. A few lines of arctangent would
+      not be a recovery loop and the header says so rather than implying one.
+- [ ] *Deferred:* bio-mimetic waveform shaping. It needs an ambient-noise and
+      biological-transient model the library does not have, and shaping against
+      a spectrum you have not measured is decoration.
 
 ## v0.14 — Bindings and portability
 

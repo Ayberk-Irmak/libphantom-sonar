@@ -1688,3 +1688,194 @@ Measured: two targets turning in opposite directions from scan 15 hold two
 established tracks through 40 scans, each detecting its own manoeuvre with the
 correct sign. And 367 false alarms over 200 scans produce **zero** established
 tracks, so M-of-N confirmation survives the swap to a mixture.
+
+
+## 20. Spread-spectrum acoustic communication
+
+The third engine of the original specification, and the last real gap. It is the
+same physics the rest of the library already models, used the other way round:
+where §7 pulls a known waveform out of noise to *detect* something, this pulls a
+known waveform out of noise to *carry* something.
+
+### 20.1 PN sequences
+
+Maximal-length LFSR codes. Two properties matter and both are measured rather
+than assumed, over every degree from 5 to 15:
+
+* **Balance** — exactly one more +1 than −1 over a full period. Measured: +1 at
+  every degree.
+* **Periodic autocorrelation** — exactly −1 at every non-zero shift. Measured:
+  0.0e+00 deviation at every degree.
+
+Those two together are what a *maximal* sequence has and a short cycle does not,
+which is why they are tested rather than the tap table trusted. The first tap
+table used the opposite convention for a right-shifting LFSR, leaving bit 0
+clear; a seed of 1 then fed back zero, the state collapsed to all-zeros on the
+first step, and the generator emitted a constant. The sequence still had the
+right *length*. Only the balance and autocorrelation tests saw it.
+
+### 20.2 Processing gain, and what it is not
+
+The formula is
+
+```
+G = 10 log10(N)     dB
+```
+
+and the usual one-line summary of it is wrong in a way this release reproduced
+before catching.
+
+**Against white noise at a fixed energy per bit, spreading buys nothing.**
+Despreading multiplies by a ±1 sequence, which leaves white noise unchanged in
+distribution; matched filtering already extracts everything a known waveform in
+white noise has to give. Measured, with amplitude scaled as `1/√N` so the energy
+per bit is constant:
+
+| chips | output SNR |
+|---|---|
+| 31 | 13.33 dB |
+| 63 | 12.46 dB |
+| 127 | 13.63 dB |
+| 255 | 13.72 dB |
+| 511 | 12.94 dB |
+
+Flat to 0.87 dB over a 16× range of code length.
+
+**The first version of this section measured the opposite** and reported
+12.17 dB against a theoretical 12.17 dB, which looked like a triumph. It held
+the chip *amplitude* fixed while sweeping N. Energy per bit is
+`A² · N · T_chip`, so that sweep quietly multiplied the transmitted energy by N
+and then reported the resulting `10 log10(N)` as processing gain. It was
+measuring *more energy helps*. The agreement with theory was exact because both
+sides were the same tautology.
+
+**Where the gain is real: bandwidth expansion at a fixed data rate.** Despreading
+spreads an interferer that was never spread, diluting a narrowband one across the
+code bandwidth while the signal collapses back to a point. Holding the data rate
+at 100 bps and growing the chip rate with N, so the occupied bandwidth grows and
+the energy per bit does not:
+
+| chips | chip rate | white noise | narrowband tone |
+|---|---|---|---|
+| 31 | 3.1 kHz | 21.98 dB | 11.82 dB |
+| 63 | 6.3 kHz | 22.73 dB | 13.26 dB |
+| 127 | 12.7 kHz | 22.01 dB | 16.14 dB |
+| 255 | 25.5 kHz | 21.70 dB | 17.17 dB |
+| 511 | 51.1 kHz | 21.28 dB | **18.91 dB** |
+
+White noise flat to 0.75 dB, as it must be. The tone gains **+7.1 dB** from 31
+to 511 chips, against an ideal 12.2 — short of it because this despreader is a
+bare correlator, and `10 log10(N)` assumes a filter matched to the *data*
+bandwidth after despreading, which collects the diluted interferer from a narrow
+slice rather than the whole band. The trend is the result.
+
+**And covertness**, which is the other half of why anyone spreads: the same
+total power over N times the bandwidth is `10 log10(N)` less power spectral
+density, so the signal sits further under the noise floor of any narrowband
+listener. That is a transmit-side property and this library does not measure it.
+
+**A trap in this module's own API.** Raising `chips_per_bit` while holding
+`chip_rate_hz` fixed does not expand bandwidth — it trades data rate for
+integration time. To spread, the chip rate must grow with the code length. The
+header says so at the point of use.
+
+### 20.2b What the code length costs
+
+At 4 kchip/s:
+
+| chips | 10 log10(N) | data rate |
+|---|---|---|
+| 31 | 14.91 dB | 129.0 bps |
+| 127 | 21.04 dB | 31.5 bps |
+| 511 | 27.08 dB | 7.8 bps |
+| 2047 | 33.11 dB | 2.0 bps |
+
+Under 4 bits per second at 30 dB, which is why a covert acoustic link carries
+status and not data.
+
+### 20.3 Doppler is a time scaling, and it sets a ceiling on gain
+
+With `c = 1500 m/s`, 1 m/s of closing speed scales time by 6.7e-4. Over a code
+of N chips that accumulates into **chip slip**:
+
+| chips | 1 m/s | 3 m/s | 10 m/s |
+|---|---|---|---|
+| 31 | 0.021 | 0.062 | 0.207 |
+| 127 | 0.085 | 0.254 | 0.847 |
+| 511 | 0.341 | 1.022 | 3.407 |
+| 2047 | 1.365 | 4.094 | **13.647** |
+
+Once the slip approaches half a chip the coherent sum has cancelled itself and
+no amount of transmit power helps. Inverting it, holding slip under a quarter
+chip:
+
+| speed | longest code | gain available |
+|---|---|---|
+| 1 m/s | 375 chips | 25.7 dB |
+| 3 m/s | 125 chips | 21.0 dB |
+| 10 m/s | 37 chips | 15.7 dB |
+
+**Speed sets a ceiling on processing gain that transmit power cannot lift.**
+Resynchronise more often, or go slower.
+
+### 20.4 Why the preamble is hyperbolic
+
+An HFM's instantaneous frequency is `1/(a + bt)`. Scale time and it is *still*
+an HFM with different constants — so a Doppler-scaled copy still matches the
+unscaled replica, and the peak **moves** rather than collapsing. An LFM has no
+such invariance. A 12 kHz sweep of 20 ms, correlation coefficient as a
+percentage of its own zero-Doppler value:
+
+| speed | LFM | HFM |
+|---|---|---|
+| 2 m/s | 99.1 % | 99.7 % |
+| 5 m/s | 96.3 % | 99.9 % |
+| 10 m/s | 86.0 % | 99.7 % |
+| 20 m/s | **54.8 %** | **99.1 %** |
+
+Three separate mistakes had to be removed before this measurement was worth
+anything, and each produced a plausible answer:
+
+1. `render_real_doppler` takes `v/c`, not `1 + v/c`. Passing the latter made the
+   zero-Doppler baseline a 2× time-compressed pulse, so every other speed
+   measured *better* than it and the ratios came out above 100% — which a
+   matched filter cannot produce, and which is what exposed the error.
+2. Comparing raw peaks rather than correlation *coefficients*. Doppler changes
+   the received energy, so a bare peak moves with speed for that reason alone.
+3. Correlating over lags starting at zero. For an upsweep the Doppler-induced
+   peak shift is **negative** — §7's `dt = −δ·f_end/μ`, about −6 samples at
+   2 m/s — so the peak fell outside the search window and both waveforms
+   appeared destroyed at speeds where neither was.
+
+### 20.5 Coding
+
+**CRC-32** (IEEE 802.3, reflected). Verified against the published check value
+`CRC-32("123456789") = 0xCBF43926`, and 512 single-bit flips all detected.
+
+**RS(15,11) over GF(16)**, built on `x⁴ + x + 1`, correcting up to 2 symbol
+errors. Symbols rather than bits is the right shape for this channel: multipath
+destroys short runs, and a 4-bit symbol ruined entirely costs the same as one
+bit flipped. Measured — 8 consecutive bits destroyed is corrected exactly.
+
+Over 4000 codewords with 0–2 symbol errors: **0 left wrong, 0 uncorrectable**.
+
+Beyond its power the picture is more interesting. With 4 errors, over 3000
+codewords:
+
+```
+1836  RS admitted defeat
+ 992  RS miscorrected to a different valid codeword
+        of those, 992 caught by the frame CRC, 0 escaped
+```
+
+Miscorrection is the **minimum distance showing, not a defect**: `d = 5`, so a
+word 4 errors from the true codeword can sit within 2 of a different one, and
+the decoder will confidently "correct" to it. That is exactly the layer a CRC
+exists for, and the measurement shows the two together closing the gap.
+
+### 20.6 What this module does not do
+
+Carrier phase is **given** to the demodulator, not recovered. Carrier recovery
+is a real subsystem — a PLL or a decision-directed loop — and a few lines of
+arctangent would not substitute for one. The same goes for chip timing recovery:
+the HFM preamble reveals the time scale, and applying it is left to the caller.

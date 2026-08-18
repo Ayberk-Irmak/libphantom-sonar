@@ -2,7 +2,7 @@
 cmake_minimum_required(VERSION 3.20)
 
 project(phantom-sonar
-        VERSION 0.12.0
+        VERSION 0.13.0
         DESCRIPTION "Real-time ocean acoustics, ray tracing and sonar pulse analysis"
         LANGUAGES CXX)
 
@@ -83,7 +83,8 @@ add_library(phantom_sonar
     src/beamformer.cpp
     src/tracker.cpp
     src/imm.cpp
-    src/ctrv.cpp)
+    src/ctrv.cpp
+    src/comm.cpp)
 add_library(phantom::sonar ALIAS phantom_sonar)
 
 target_include_directories(phantom_sonar
@@ -131,7 +132,8 @@ if(PHANTOM_BUILD_TESTS)
         tests/test_tracker.cpp
         tests/test_real_profiles.cpp
         tests/test_imm.cpp
-        tests/test_ctrv.cpp)
+        tests/test_ctrv.cpp
+        tests/test_comm.cpp)
     target_link_libraries(phantom_tests PRIVATE phantom_sonar)
     target_include_directories(phantom_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
     target_compile_options(phantom_tests PRIVATE ${PHANTOM_WARNINGS})
