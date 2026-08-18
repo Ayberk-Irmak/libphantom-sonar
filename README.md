@@ -5,7 +5,7 @@ Zero dependencies, zero heap allocation, C++20.
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 ![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)
-![Status](https://img.shields.io/badge/status-v0.14%20bindings-orange.svg)
+![Status](https://img.shields.io/badge/status-v0.15%20air%20bench-orange.svg)
 ![Validated](https://img.shields.io/badge/validated-vs%20Bellhop-brightgreen.svg)
 
 ![Munk deep sound channel propagation](data/munk_rays.png)
@@ -516,6 +516,7 @@ tells you the code did not change. These tell you it is right:
 | DSSS vs white noise at fixed Eb (must be flat) | 0.87 dB spread over 16× code length |
 | PN autocorrelation vs −1, degrees 5–15 | 0.0e+00 deviation |
 | CRC-32 vs its published check value | 0xCBF43926 |
+| Air absorption vs ISO 9613-1 Table 1 | 105 values, 0.380% worst |
 
 95806 checks. Clean under GCC 15 and Clang 21 with `-Wconversion -Wsign-conversion
 -Wold-style-cast -Wdouble-promotion -Werror`, and under ASan + UBSan. Passes in
@@ -765,6 +766,56 @@ borrow checker's problem, and `speed_at` returns an error where C answers 0 m/s
 for a one-sample profile — a silent failure a binding test found. Its tests
 check the *binding*, not the physics; re-asserting a ray path in Rust would
 prove only that FFI copies bytes.
+
+## v0.15 — acoustics in air, and a bench you can actually run
+
+Hardware in the loop starts in the medium anyone can test in. A hydrophone and a
+projector cost several hundred euros and need water to put them in; a speaker
+and a microphone are already on the desk. The signal processing does not care —
+a matched filter and a Doppler bank are the same code at 340 m/s as at 1500 —
+so an air bench exercises the whole chain before any wet hardware is bought.
+
+**Atmospheric absorption, against ISO 9613-1:1993 Table 1.** 105 published
+values at 10 °C, worst relative error **0.380%** — and that worst case is the
+table's own three-figure rounding, not a disagreement.
+
+The standard's note 5 says its table was computed at *exact* one-third-octave
+midband frequencies, not the nominal values printed in its own row headings.
+Measured, that matters:
+
+| | worst error against the table |
+|---|---|
+| exact midband frequencies | 0.380% |
+| nominal frequencies | **1.733%** (4.6× worse) |
+
+**Humidity is not a correction, it is the effect.** At 10 °C:
+
+| frequency | 10% RH | 20% RH | 50% RH | 100% RH |
+|---|---|---|---|---|
+| 501 Hz | 7.52 | 3.27 | 1.90 | 2.03 |
+| 3981 Hz | 57.29 | **91.45** | 46.67 | 23.45 |
+| 7943 Hz | 69.42 | 153.81 | **155.08** | 83.71 |
+
+Going from 10% to 20% humidity at 4 kHz multiplies the loss by 1.60 — and the
+direction *reverses* with frequency. Nothing in seawater behaves like this, and
+a bench measurement in air that doesn't record the humidity means nothing.
+
+**Air is the harsher Doppler environment, by 4.37×.** A 511-chip spreading code
+slips **1.49 chips per bit at walking pace** in air, against 0.34 in water. That
+makes an air bench a *stronger* test of the comm module than a water one.
+
+**And the honest part.** Real hardware-in-the-loop was attempted on the
+development machine and does not work there. The audio devices enumerate, but a
+controlled test settles it: recording while playing five chirps gave **7.85 dB
+less** in-band energy than recording in silence. No speaker-to-microphone
+coupling could be demonstrated, so no hardware measurement is claimed.
+
+`tools/air_bench.py selftest` verifies the analysis without hardware — it
+recovers a simulated direct path at 1.500 ms (truth 1.500) and an echo at
+4.00 ms. Running it against real hardware is the next release, and the tool
+already documents the trap: the measured delay includes the sound card's
+10–50 ms latency, which dwarfs the 1.5 ms sound takes to cross half a metre. Only
+a two-distance measurement removes it.
 
 ## Measured performance
 

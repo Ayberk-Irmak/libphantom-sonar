@@ -1252,7 +1252,76 @@ Two findings worth recording:
   reinterprets every float crossing the boundary, so `check_precision()` exists
   and every constructor calls it.
 
-## 19. Build and runtime hygiene ✅
+## 19. Acoustics in air — verified ✅
+
+Air is here because it is the medium anyone can test in: a speaker and a
+microphone are already on the desk. The DSP does not care which medium it is in,
+so an air bench exercises the whole chain before any wet hardware is bought.
+
+### Against ISO 9613-1:1993 Table 1
+
+105 published attenuation coefficients at 10 °C, one standard atmosphere:
+
+```
+worst relative error 0.380%
+worst case at 315 Hz, 90% RH: published 1.30, computed 1.305 dB/km
+```
+
+That worst case is the table's own three-figure rounding, not a disagreement.
+
+**Note 5 of the standard, measured.** The table was computed at exact
+one-third-octave midband frequencies `1000·10^(k/10)`, not the nominal values in
+its own row headings:
+
+| | worst error |
+|---|---|
+| exact midband | 0.380% |
+| nominal | **1.733%** (4.6× worse) |
+
+The transcription was verified the same way as the UNESCO table in §14: the
+equations were entered separately from the standard's clause 6.2, and a
+transcription slip would appear as one large outlier rather than a uniform
+near-miss. The PDF's text layer is OCR-damaged in places, so only unambiguous
+cells were included — 105 of them.
+
+### Humidity is not a correction
+
+At 10 °C, 4 kHz: going from 10% to 20% relative humidity **multiplies** the loss
+by 1.60. And the sign of the effect reverses with frequency — at 500 Hz damp air
+absorbs less, at 8 kHz more. A bench measurement in air that does not record the
+humidity means nothing.
+
+### Air is the harsher Doppler environment
+
+`v/c` is 2.91e-3 in air against 6.67e-4 in water, a factor of 4.37. A 511-chip
+spreading code slips **1.49 chips per bit at 1 m/s** in air, where in water it
+slips 0.34. That makes an air bench a stronger test of §17's comm module than a
+water one, not a weaker substitute.
+
+### What the bench cannot do, and one thing it could not do here
+
+`tools/air_bench.py selftest` recovers a simulated direct path at 1.500 ms
+(truth 1.500) and an echo at 4.00 ms, so the analysis path is verified without
+hardware.
+
+**Real hardware-in-the-loop was attempted on this machine and does not work.**
+The audio devices enumerate — an ALC256 with analogue playback and capture — but
+there is no working acoustic path. A controlled test settles it: recording while
+playing five 50 ms chirps gave *less* energy in the 2–8 kHz band than recording
+in silence, by 7.85 dB. Capture is also dominated by a large startup transient.
+Whatever the cause, no speaker-to-microphone coupling could be demonstrated, so
+no hardware measurement is claimed. The bench tool is written and self-verified;
+running it against real hardware is for a machine that has some.
+
+Two limitations hold even on working hardware, and are stated in the tool:
+
+- **Timing and detection only, not level.** Consumer speakers and microphones
+  have unknown, uncalibrated, non-flat responses.
+- **The measured delay includes the sound card's latency**, typically 10–50 ms
+  against 1.5 ms of flight time over half a metre. Only a two-distance
+  measurement removes it, because the difference cancels fixed electronic delay.
+
+## 20. Build and runtime hygiene ✅
 
 | Configuration | Result |
 |---|---|
@@ -1291,7 +1360,7 @@ layers:
 acceptable if you are differencing travel times for ranging. Use `double` unless
 your FPU forces otherwise.
 
-## 20. Performance (measured, not claimed)
+## 21. Performance (measured, not claimed)
 
 13th Gen Intel Core i7-13620H, `-O3`, single thread:
 
@@ -1331,7 +1400,7 @@ actually constrains a control loop, and measures **52 ns**. Re-run
 guarantee; these numbers are not a substitute for WCET analysis on the target
 silicon.
 
-## 21. Self-consistent but NOT independently verified ⚠️
+## 22. Self-consistent but NOT independently verified ⚠️
 
 - **Chapman-Harris surface backscatter coefficients.** The formula is written
   out in the header so a reader can check it, and its behaviour is verified
@@ -1352,7 +1421,7 @@ silicon.
 - **Real measured T/S profiles.** Everything so far uses analytic profiles
   (Munk, linear, isovelocity). Feeding World Ocean Atlas / Argo data is v0.2.
 
-## 22. Known limitations — not bugs, scope ⚠️
+## 23. Known limitations — not bugs, scope ⚠️
 
 - **Shadow fraction depends on ray density.** Gaps between adjacent rays read as
   shadow. Measured convergence for the 100 km Munk case on a 500×250 grid:
@@ -1382,12 +1451,17 @@ silicon.
   frequency-dependent.
 - **2-D (range–depth) only.** No azimuthal coupling or out-of-plane refraction.
 
-## 23. Not implemented in v0.14
+## 24. Not implemented in v0.15
 
 `BioMimeticCommEngine` is not in this release. See `docs/roadmap.md`.
 
 Known gaps within what *is* shipped:
 
+- **No verified hardware measurement.** See §19: this machine has no working
+  acoustic path, so every number in this document is simulation or published
+  reference. Nothing here has been measured against a real transducer.
+- **Air sound speed is not Cramer (1993).** No CO2 term, no pressure
+  dependence; a few tenths of a m/s over 0-40 C at sea level.
 - **The C ABI does not cover everything.** Beamforming, eigenrays and
   reverberation are absent: their C++ interfaces take several spans at once and
   a C shape for them has not been designed. "Stable" means what is there will

@@ -258,7 +258,7 @@ The third engine of the original specification, and the last real gap.
       biological-transient model the library does not have, and shaping against
       a spectrum you have not measured is decoration.
 
-## v0.14 — Bindings and portability ✅ *(current)*
+## v0.14 — Bindings and portability ✅
 
 - [x] **Stable C ABI** (`include/phantom/phantom.h`), hand-written, no
       generator. Caller-owned storage throughout -- the library allocates
@@ -281,17 +281,47 @@ The third engine of the original specification, and the last real gap.
       provided but this environment's arm-none-eabi has no C++ standard
       library, so it is UNTESTED and labelled so rather than claimed.
 
-## v0.15 — Hardware in the loop
+## v0.15 — Air acoustics, and the bench ✅ *(current)*
 
-See `docs/hardware.md` for the bench design and the bill of materials. Bench and
-tank only — a real acoustic transmitter in open water is a regulatory and
-marine-mammal issue, not a weekend experiment.
+Hardware in the loop, started in the medium anyone can test in. A hydrophone and
+a projector cost several hundred euros and need water; a speaker and a
+microphone are already on the desk, and the DSP is the same code at 340 m/s as
+at 1500.
 
-- [ ] Red Pitaya STEMlab acquisition path, measured end-to-end latency
-- [ ] Tank measurements at 40–200 kHz, ping detection latency histogram
-- [ ] Measured vs simulated arrival times, published as a figure
+- [x] **ISO 9613-1:1993 atmospheric absorption**, verified against Table 1 of
+      the standard itself: 105 published values, worst relative error **0.380%**
+      -- which is the table's own three-figure rounding. Also quantified the
+      standard's note 5: using nominal band frequencies instead of the exact
+      midband ones makes the error 4.6x worse, and that is not the
+      implementation's fault.
+- [x] **Humidity as a first-order effect.** At 4 kHz, 10% -> 20% relative
+      humidity multiplies the loss by 1.60, and the sign reverses with
+      frequency. Nothing in seawater behaves like this.
+- [x] **Air sound speed and impedance.** 343.37 m/s at 20 C dry; 412 rayl
+      against seawater's 1.5e6, a factor of 3637 -- which is why an air bench
+      says nothing about target strength even though it exercises every line of
+      the processing.
+- [x] **Air is the HARSHER Doppler environment**, by 4.37x. A 511-chip code
+      slips 1.49 chips per bit at walking pace. If the Doppler machinery
+      survives that, water is the easy case.
+- [x] **`tools/air_bench.py`**, with a self-test that recovers a simulated
+      direct path at 1.500 ms and an echo at 4.00 ms without any hardware.
+- [ ] **A real measurement: NOT done.** Hardware-in-the-loop was attempted on
+      the development machine and does not work there -- the audio devices
+      enumerate but recording while playing gave 7.85 dB LESS in-band energy
+      than recording in silence, so no acoustic path could be demonstrated. The
+      tool is written and self-verified; a real measurement waits for a machine
+      with a working speaker and microphone.
 
----
+## v0.16 — A measured channel
+
+- [ ] Run `air_bench.py` on hardware that works. The two-distance protocol
+      removes the sound card's latency; agreement with a tape measure to a few
+      centimetres would be the first number in this project measured rather than
+      computed.
+- [ ] Room impulse response from the same recordings, and the multipath model
+      of v0.4 compared against it.
+- [ ] Then, and only then, wet hardware: hydrophone, projector, amplifier.
 
 ## Explicitly out of scope
 

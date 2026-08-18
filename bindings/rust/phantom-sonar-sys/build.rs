@@ -20,4 +20,9 @@ fn main() {
     println!("cargo:rustc-link-lib=dylib=stdc++");
     println!("cargo:rustc-link-lib=dylib=m");
     println!("cargo:rerun-if-env-changed=PHANTOM_SONAR_LIB_DIR");
+    // Watch the archive itself. Without this, cargo happily reuses a link
+    // against a stale library: rebuilding the C++ side and re-running the tests
+    // silently tests the OLD binary, which is exactly the sort of thing that
+    // makes a version-check test fail for a reason nobody can find.
+    println!("cargo:rerun-if-changed={dir}/libphantom-sonar.a");
 }

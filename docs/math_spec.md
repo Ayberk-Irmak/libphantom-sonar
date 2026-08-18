@@ -2006,3 +2006,113 @@ this layer is a field in the wrong order, an enum discriminant off by one, a
 size mismatch — so the tests either round-trip a value with a published answer
 (the UNESCO check value, the CRC-32 check value) or compare a layout against the
 library's own view of it.
+
+
+## 22. Acoustics in air
+
+### 22.1 Why air is in an underwater library
+
+Because it is the medium anyone can test in. A hydrophone, a projector and an
+amplifier cost several hundred euros and need water to put them in; a speaker
+and a microphone are already on the desk. The signal processing does not care
+which medium it is in — a matched filter, a Doppler bank, a CFAR detector and a
+tracker are the same code at 340 m/s as at 1500 m/s — so an air bench exercises
+the whole chain before any wet hardware is bought.
+
+Three things change, and they are why this is a module rather than a note saying
+"set c = 343".
+
+### 22.2 Absorption, and why humidity is not a correction
+
+ISO 9613-1:1993, equations (3) to (5). Two molecular relaxation frequencies —
+oxygen and nitrogen — plus a classical term that is negligible below ~100 kHz:
+
+```
+f_rO = (p/p_r)(24 + 4.04e4 h (0.02 + h)/(0.391 + h))
+f_rN = (p/p_r)(T/T_0)^(-1/2) (9 + 280 h exp{-4.170[(T/T_0)^(-1/3) - 1]})
+
+a = 8.686 f^2 { 1.84e-11 (p/p_r)^-1 (T/T_0)^(1/2)
+              + (T/T_0)^(-5/2) [ 0.01275 e^(-2239.1/T) / (f_rO + f^2/f_rO)
+                               + 0.1068 e^(-3352.0/T) / (f_rN + f^2/f_rN) ] }
+```
+
+with `h` the molar concentration of water vapour in percent — which is what the
+standard is written in terms of, not relative humidity.
+
+**Verified against Table 1 of the standard itself**: 105 published values at
+10 °C, worst relative error **0.380%**, and that worst case is at 315 Hz where
+the table prints 1.30 against a computed 1.305 — the table's own three-figure
+rounding.
+
+**Note 5 of the standard, quantified.** ISO 9613-1 records that Table 1 was
+computed at the *exact* one-third-octave midband frequencies `1000·10^(k/10)`,
+not the preferred nominal values printed in its own row headings. Using the
+nominal frequencies instead:
+
+| | worst error against the table |
+|---|---|
+| exact midband frequencies | 0.380% |
+| nominal frequencies | **1.733%** (4.6× worse) |
+
+Small, systematic, and not the implementation's fault — which is exactly the
+kind of thing that gets blamed on an implementation.
+
+**Humidity dominates, and not monotonically.** At 10 °C:
+
+| frequency | 10% RH | 20% RH | 50% RH | 100% RH |
+|---|---|---|---|---|
+| 501 Hz | 7.52 | 3.27 | 1.90 | 2.03 |
+| 1995 Hz | 42.32 | 36.18 | 13.19 | 7.71 |
+| 3981 Hz | 57.29 | **91.45** | 46.67 | 23.45 |
+| 7943 Hz | 69.42 | 153.81 | **155.08** | 83.71 |
+
+Going from 10% to 20% humidity at 4 kHz **multiplies** the loss by 1.60. And the
+direction reverses with frequency: at 500 Hz damp air absorbs *less*, at 8 kHz
+*more*. A model that only knew "damp air absorbs more" would be wrong half the
+time. Nothing in seawater behaves like this, which is why a bench measurement in
+air that does not record the humidity means nothing.
+
+### 22.3 Sound speed and impedance
+
+`c = 331.45 √(T/273.15) · (1 + 0.16 h)`, giving 331.45 m/s at 0 °C and 343.37 at
+20 °C dry. This is **not** Cramer (1993) — no CO₂ term, no pressure dependence —
+and the header says so; over 0–40 °C at sea level the difference is a few tenths
+of a m/s, smaller than the temperature uncertainty of any bench measurement.
+
+Impedance is 412 rayl at 20 °C against seawater's ~1.5e6, a factor of **3637**.
+That is why an air bench says nothing quantitative about target strength even
+though it exercises every line of the signal processing.
+
+### 22.4 Air is the harsher Doppler environment
+
+With `c` 4.37× smaller, every Doppler time-scaling is 4.37× larger for the same
+closing speed: 1 m/s is `v/c = 2.91e-3` in air against `6.67e-4` in water. Chip
+slip per bit at 1 m/s:
+
+| chips | water | air |
+|---|---|---|
+| 127 | 0.085 | 0.370 |
+| 511 | 0.341 | **1.488** |
+| 2047 | 1.365 | 5.961 |
+
+A 511-chip code slips a chip and a half per bit at walking pace in air. If the
+Doppler machinery survives that, water is the easy case — which makes an air
+bench a *stronger* test of §20's comm module, not a weaker one.
+
+### 22.5 The bench, and what it cannot measure
+
+`tools/air_bench.py` plays a probe, records it, matched-filters the recording and
+reports each arrival's delay and implied path length. Its `selftest` runs the
+whole analysis against a simulated channel — direct path at 1.50 ms plus an echo
+at 4.00 ms, 8 dB down — and recovers both exactly, so the analysis path is
+verified without hardware.
+
+Two limitations are stated in the tool itself rather than left to be discovered:
+
+* **It measures timing and detection, not level.** A laptop speaker and
+  microphone have unknown, uncalibrated and wildly non-flat responses. Absolute
+  level, target strength and absorption cannot be measured this way.
+* **The delay includes the sound card's own latency**, typically 10–50 ms, which
+  dwarfs the 1.5 ms sound takes to cross half a metre. The only reliable removal
+  is a two-distance measurement: the *difference* of two delays cancels every
+  fixed electronic latency and leaves the acoustics.
