@@ -224,7 +224,7 @@ of the next. Joining them is cheaper than any new physics and worth more.
       cheaper than expected -- an extra state costs almost nothing when the
       measurement never moves it.
 
-## v0.13 — Spread-spectrum acoustic communication ✅ *(current)*
+## v0.13 — Spread-spectrum acoustic communication ✅
 
 The third engine of the original specification, and the last real gap.
 
@@ -258,12 +258,28 @@ The third engine of the original specification, and the last real gap.
       biological-transient model the library does not have, and shaping against
       a spectrum you have not measured is decoration.
 
-## v0.14 — Bindings and portability
+## v0.14 — Bindings and portability ✅ *(current)*
 
-- [ ] Stable C ABI (`phantom.h`, hand-written, no generator)
-- [ ] Rust `phantom-sonar-sys` + safe wrapper crate
-- [ ] Cortex-M7 / RISC-V cross-compilation in CI with size and WCET reporting
-- [ ] `-fno-exceptions -fno-rtti` build mode
+- [x] **Stable C ABI** (`include/phantom/phantom.h`), hand-written, no
+      generator. Caller-owned storage throughout -- the library allocates
+      nothing and the ABI does not quietly change that. Tested by a C compiler
+      in C11 mode, not by C++ in C mode: 269 checks.
+- [x] **Rust `phantom-sonar-sys` + safe `phantom-sonar` crate.** 8 tests. The
+      safe layer earns its place: a `Profile` owns its storage so the C
+      contract becomes the borrow checker's problem, and `speed_at` returns an
+      error where C answers 0 m/s for a one-sample profile -- a silent failure a
+      binding test found.
+- [x] **Cross-compilation verified** on ARM 32-bit/float and RISC-V
+      64-bit/double, with size reporting. This found a real defect: the C ABI
+      was carrying **160 kB of .bss** in a ray-trace scratch buffer -- half the
+      RAM of the target part -- for a copy that did nothing. Replaced with
+      static_asserts on the layout; the library now has data == 0 and bss == 0,
+      asserted in CI.
+- [x] **`-fno-exceptions -fno-rtti` build mode**, verified to reference no
+      unwinder symbols.
+- [ ] *Not done:* the bare-metal Cortex-M7 build. The toolchain file is
+      provided but this environment's arm-none-eabi has no C++ standard
+      library, so it is UNTESTED and labelled so rather than claimed.
 
 ## v0.15 — Hardware in the loop
 

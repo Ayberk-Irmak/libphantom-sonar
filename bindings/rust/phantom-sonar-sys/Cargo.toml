@@ -1,0 +1,14 @@
+[package]
+name = "phantom-sonar-sys"
+version = "0.14.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Raw FFI declarations for libphantom-sonar"
+links = "phantom-sonar"
+
+[lib]
+name = "phantom_sonar_sys"
+path = "src/lib.rs"
+
+[features]
+real_float = []

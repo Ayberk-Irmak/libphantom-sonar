@@ -5,7 +5,7 @@ Zero dependencies, zero heap allocation, C++20.
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 ![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)
-![Status](https://img.shields.io/badge/status-v0.13%20comms-orange.svg)
+![Status](https://img.shields.io/badge/status-v0.14%20bindings-orange.svg)
 ![Validated](https://img.shields.io/badge/validated-vs%20Bellhop-brightgreen.svg)
 
 ![Munk deep sound channel propagation](data/munk_rays.png)
@@ -716,6 +716,55 @@ The CRC catches all 992:
 **What it does not do:** carrier phase is *given* to the demodulator, not
 recovered, and there is no equaliser. A few lines of arctangent would not be a
 carrier recovery loop, and the header says so rather than implying otherwise.
+
+## v0.14 — bindings and portability
+
+No new physics — this release is about whether the physics can leave the
+building. It found one real defect and one honest gap.
+
+**A C ABI where the caller owns the memory.** The library allocates nothing, and
+the ABI does not quietly change that by handing out pointers to free:
+
+```c
+size_t n = ph_profile_size();
+void*  storage = malloc(n);           /* or static, or stack */
+ph_profile* p = ph_profile_init(storage, n);
+```
+
+Tested by a **C compiler in C11 mode**, not by C++ in C mode — 269 checks,
+round-tripping values with published answers rather than merely returning them.
+
+**160 kB of .bss that cross-compiling found.** The first version copied traced
+rays through a static 8192-point buffer, to avoid assuming two structs shared a
+layout. On ARM that showed up as:
+
+| | before | after |
+|---|---|---|
+| text | 61216 | 61160 |
+| data | 1536 | **0** |
+| bss | **163840** | **0** |
+
+Half the RAM of the Cortex-M7 this is meant to fit on, for a copy that did
+nothing — and it made the call non-reentrant. The assumption did not need
+avoiding, it needed `static_assert`-ing on size, alignment and every member
+offset. The library now carries **no mutable static storage at all**, and CI
+asserts it.
+
+**Cross-compiled and verified** on ARM 32-bit/float and RISC-V 64-bit/double —
+two architectures, two word sizes, both precisions, because the bugs this catches
+only appear when `size_t`, pointer width and `Real` change together. Plus a
+`-fno-exceptions -fno-rtti` mode that references no unwinder symbols.
+
+**Not verified, and said so:** the bare-metal Cortex-M7 build. The toolchain file
+is provided but this environment's `arm-none-eabi` ships no C++ standard library,
+so it is untested and labelled untested.
+
+**Rust bindings**, `phantom-sonar-sys` plus a safe `phantom-sonar`. The safe
+layer earns its keep: a `Profile` owns its storage so the C contract becomes the
+borrow checker's problem, and `speed_at` returns an error where C answers 0 m/s
+for a one-sample profile — a silent failure a binding test found. Its tests
+check the *binding*, not the physics; re-asserting a ray path in Rust would
+prove only that FFI copies bytes.
 
 ## Measured performance
 

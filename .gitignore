@@ -27,3 +27,6 @@ at_*.zip
 *.ray
 *.prt
 *.shd
+
+# Rust build output. The crates are source; target/ is not.
+bindings/rust/target/

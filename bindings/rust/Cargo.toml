@@ -1,0 +1,3 @@
+[workspace]
+members = ["phantom-sonar-sys", "phantom-sonar"]
+resolver = "2"

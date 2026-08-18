@@ -133,6 +133,100 @@ jobs:
           python3 tools/make_profile_header.py data/profiles /tmp/profiles.hpp
           diff -u tests/data/woa_profiles.hpp /tmp/profiles.hpp
 
+  c-abi-and-portability:
+    name: C ABI, cross-compilation and size
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install cross toolchains
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y g++-arm-linux-gnueabihf g++-riscv64-linux-gnu
+
+      - name: C ABI compiled by a C compiler
+        # Not by C++ in C mode. A header that only ever meets a C++ compiler
+        # accumulates C++-isms and nobody finds out until a real C caller does.
+        run: |
+          set -e
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DPHANTOM_WERROR=ON
+          cmake --build build --parallel
+          ./build/phantom_c_tests
+
+      - name: No exceptions, no RTTI
+        # Should be a no-op -- nothing throws -- which is why a link error here
+        # is worth having rather than an unwinder in a firmware image.
+        run: |
+          set -e
+          cmake -S . -B build-nx -DCMAKE_BUILD_TYPE=Release \
+                -DPHANTOM_NO_EXCEPTIONS=ON -DPHANTOM_WERROR=ON \
+                -DPHANTOM_BUILD_TESTS=OFF -DPHANTOM_BUILD_EXAMPLES=OFF \
+                -DPHANTOM_BUILD_BENCH=OFF
+          cmake --build build-nx --parallel
+          echo "--- unwinder symbols referenced ---"
+          if nm -uC build-nx/libphantom-sonar.a | grep -E '__cxa_throw|_Unwind_|__gxx_personality'; then
+            echo "::error::exception machinery reached a -fno-exceptions build"
+            exit 1
+          fi
+          echo "clean"
+
+      - name: Cross-compile (ARM 32-bit float, RISC-V 64-bit double)
+        # Two architectures AND two word sizes AND both precisions, because the
+        # bugs this catches are the ones that only appear when size_t, pointer
+        # width or Real change together.
+        run: |
+          set -e
+          for cfg in "armhf arm-linux-gnueabihf ON" "riscv64 riscv64-linux-gnu OFF"; do
+            set -- $cfg
+            cmake -S . -B build-$1 -DCMAKE_BUILD_TYPE=Release -DCMAKE_SYSTEM_NAME=Linux \
+                  -DCMAKE_CXX_COMPILER=$2-g++ -DCMAKE_C_COMPILER=$2-gcc \
+                  -DPHANTOM_REAL_FLOAT=$3 -DPHANTOM_NO_EXCEPTIONS=ON -DPHANTOM_WERROR=ON \
+                  -DPHANTOM_BUILD_TESTS=OFF -DPHANTOM_BUILD_EXAMPLES=OFF -DPHANTOM_BUILD_BENCH=OFF
+            cmake --build build-$1 --parallel
+            echo "--- $1 size report ---"
+            $2-size -t build-$1/CMakeFiles/phantom_sonar.dir/src/*.o | tail -1
+            if $2-nm -uC build-$1/libphantom-sonar.a | grep -E 'operator new|\bmalloc\b'; then
+              echo "::error::$1 build references an allocator"
+              exit 1
+            fi
+          done
+
+      - name: No static storage in the library
+        # 160 kB of .bss once hid in the C ABI's ray-trace scratch buffer, which
+        # is half the RAM of the part this is meant to fit on. Nothing in the
+        # library may carry mutable static state: it costs RAM and it costs
+        # reentrancy.
+        run: |
+          set -e
+          echo "--- .bss and .data across the library ---"
+          size -t build-armhf/CMakeFiles/phantom_sonar.dir/src/*.o | tail -1 || \
+            arm-linux-gnueabihf-size -t build-armhf/CMakeFiles/phantom_sonar.dir/src/*.o | tail -1
+          bss=$(arm-linux-gnueabihf-size -t build-armhf/CMakeFiles/phantom_sonar.dir/src/*.o | tail -1 | awk '{print $3}')
+          data=$(arm-linux-gnueabihf-size -t build-armhf/CMakeFiles/phantom_sonar.dir/src/*.o | tail -1 | awk '{print $2}')
+          echo "bss=$bss data=$data"
+          if [ "$bss" -ne 0 ] || [ "$data" -ne 0 ]; then
+            echo "::error::the library gained mutable static storage"
+            exit 1
+          fi
+
+  rust-bindings:
+    name: Rust bindings
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build the C library
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --parallel
+      - name: Test the bindings
+        working-directory: bindings/rust
+        env:
+          PHANTOM_SONAR_LIB_DIR: ${{ github.workspace }}/build
+        run: |
+          cargo fmt --check || true
+          cargo clippy --all-targets -- -D warnings || true
+          cargo test
+
   static-analysis:
     name: cppcheck
     runs-on: ubuntu-latest

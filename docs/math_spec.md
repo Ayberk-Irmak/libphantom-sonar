@@ -1879,3 +1879,130 @@ Carrier phase is **given** to the demodulator, not recovered. Carrier recovery
 is a real subsystem — a PLL or a decision-directed loop — and a few lines of
 arctangent would not substitute for one. The same goes for chip timing recovery:
 the HFM preamble reveals the time scale, and applying it is left to the caller.
+
+
+## 21. Bindings and portability
+
+No new physics. This section is about whether the physics can leave the
+building, and it produced one real defect and one honest gap.
+
+### 21.1 The C ABI, and who owns the memory
+
+Hand-written, not generated. A generator mirrors whatever the C++ headers say
+today, including their mistakes, and leaves nowhere to record what a function
+*means* — and the C++ interface is spans, templates and RAII, none of which have
+a stable C representation.
+
+The library allocates nothing, and the ABI does not quietly change that by
+handing out pointers a C caller must free. Every stateful object works the same
+way:
+
+```c
+size_t n = ph_profile_size();
+void*  storage = malloc(n);           /* or static, or stack */
+ph_profile* p = ph_profile_init(storage, n);
+```
+
+The caller decides where it lives; the library decides only how big it is. That
+keeps a static-only or interrupt-context caller possible, which is the whole
+reason the C++ side carries the constraint.
+
+The C tests are compiled by a **C compiler in C11 mode**, not by C++ in C mode.
+A header that only ever meets a C++ compiler accumulates C++-isms — a default
+argument, a `bool`, a scoped enum — and nobody finds out until a real C caller
+arrives.
+
+### 21.2 The defect the size report found
+
+The first C ABI copied traced rays through a static 8192-point scratch buffer,
+on the reasoning that "the ABI must not assume `ph_ray_point` and `RayPoint`
+share a layout". Cross-compiling for ARM and reporting section sizes showed what
+that cost:
+
+```
+bss 163840 bytes  — all of it in c_api
+```
+
+**160 kB of .bss, half the RAM of the Cortex-M7 this library is meant to fit on**,
+for a copy that does nothing. It also made `ph_trace_ray` non-reentrant.
+
+The assumption did not need avoiding, it needed **checking**:
+
+```cpp
+static_assert(sizeof(ph_ray_point) == sizeof(phantom::RayPoint));
+static_assert(alignof(ph_ray_point) == alignof(phantom::RayPoint));
+static_assert(offsetof(ph_ray_point, angle_rad) == offsetof(phantom::RayPoint, angle_rad));
+/* ...one per member... */
+```
+
+If any of it ever stops holding, the build breaks rather than the ABI scrambling
+ray paths. After the fix, and moving the tracker's measurement conversion from a
+static to a stack buffer:
+
+| | before | after |
+|---|---|---|
+| text | 61216 | 61160 |
+| data | 1536 | **0** |
+| bss | 163840 | **0** |
+
+The library now carries no mutable static storage at all, which is both a RAM
+saving and the reentrancy it implies. CI asserts `data == 0 && bss == 0` so it
+cannot come back.
+
+### 21.3 Cross-compilation, verified and unverified
+
+**Verified here:** ARM 32-bit hard-float with `Real = float`, and RISC-V 64-bit
+with `Real = double`. Two architectures, two word sizes, both precisions — the
+combination matters, because the bugs this catches are the ones that only appear
+when `size_t`, pointer width and `Real` change together. Both build clean under
+`-Werror` and reference no allocator symbols.
+
+**Not verified here:** the bare-metal Cortex-M7 build. `cmake/cortex-m7.cmake`
+is provided and is correct as far as it goes, but this environment's
+`arm-none-eabi` toolchain ships no C++ standard library, so the build could not
+be run. That is stated rather than glossed: the toolchain file is untested, and
+the ARM figures above come from `arm-linux-gnueabihf`, which is the same
+instruction set but a hosted target.
+
+`PHANTOM_REAL_FLOAT` is not optional advice on an M-class part. The FPU is
+single precision; double arithmetic is emulated in software at roughly two
+orders of magnitude cost, which turns a real-time budget into a non-real-time
+one with no error message. §13 quantifies what float costs in accuracy so the
+trade can be made deliberately.
+
+### 21.4 -fno-exceptions -fno-rtti
+
+Should be a no-op, since nothing in the library throws. That is exactly why it
+is worth building: if it ever stops being true, the failure is a link error in
+CI rather than an unwinder pulled into a firmware image that has no business
+carrying one. Verified: no `__cxa_throw`, `_Unwind_*` or `__gxx_personality`
+symbols are referenced.
+
+### 21.5 Rust
+
+Two crates: `phantom-sonar-sys` with raw `extern "C"` declarations transcribed
+by hand from `phantom.h`, and `phantom-sonar` wrapping them safely.
+
+The declarations can drift from the header. A layout test compares every
+opaque type's size and alignment against what the library itself reports, which
+turns drift into a test failure rather than a memory corruption.
+
+**What the safe layer adds beyond `unsafe` removal.** A `Profile` owns its
+storage, so the C contract's "caller-supplied buffer must outlive the object"
+becomes the borrow checker's problem rather than a comment. And it can be
+stricter than C where C is loose: `ph_profile_speed_at` answers 0 m/s for a
+profile with fewer than two samples — a silent failure a caller can propagate —
+where the Rust `speed_at` returns `Err(Error::State)`. That case was found by a
+binding test, not by design.
+
+**Precision is checked, not assumed.** A library built with `float` linked
+against a crate assuming `f64` is not a link error; it reinterprets every number
+crossing the boundary. `check_precision()` compares them at runtime and every
+constructor calls it.
+
+The binding tests deliberately do **not** re-verify the physics. Re-asserting a
+ray path in Rust would prove only that FFI copies bytes. What can go wrong at
+this layer is a field in the wrong order, an enum discriminant off by one, a
+size mismatch — so the tests either round-trip a value with a published answer
+(the UNESCO check value, the CRC-32 check value) or compare a layout against the
+library's own view of it.

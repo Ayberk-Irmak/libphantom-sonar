@@ -1182,7 +1182,77 @@ Miscorrection is the code's minimum distance (`d = 5`) showing, not a defect,
 and the CRC is the layer that exists to catch it. The two together let nothing
 through in 3000 trials.
 
-## 18. Build and runtime hygiene ✅
+## 18. Bindings and portability — verified ✅
+
+### The C ABI
+
+269 checks, compiled by a **C compiler in C11 mode** with
+`-Wstrict-prototypes -Wmissing-prototypes -Werror`. Values with published
+answers are round-tripped through the boundary rather than merely returned:
+the UNESCO check value comes back as 1731.9954, `CRC-32("123456789")` as
+0xCBF43926, and Snell's invariant holds across a ray traced through the C API.
+
+### 160 kB of .bss that the size report found
+
+The first C ABI traced rays through a static 8192-point scratch buffer, to avoid
+assuming `ph_ray_point` and `RayPoint` share a layout. Cross-compiling and
+reporting section sizes showed the cost:
+
+| | before | after |
+|---|---|---|
+| text | 61216 | 61160 |
+| data | 1536 | **0** |
+| bss | **163840** | **0** |
+
+Half the RAM of the Cortex-M7 the library is meant to fit on, for a copy that
+does nothing — and it made the function non-reentrant. The layout assumption did
+not need avoiding, it needed `static_assert`-ing: size, alignment and every
+member offset are now checked at build time, so a mismatch breaks the build
+rather than scrambling ray paths.
+
+The library now carries **no mutable static storage at all**. CI asserts
+`data == 0 && bss == 0` so it cannot return.
+
+### Cross-compilation
+
+| target | word size | Real | result |
+|---|---|---|---|
+| arm-linux-gnueabihf | 32-bit | float | clean, 0 allocator symbols |
+| riscv64-linux-gnu | 64-bit | double | clean, 0 allocator symbols |
+
+Two architectures, two word sizes and both precisions, because the bugs this
+catches only appear when `size_t`, pointer width and `Real` change together.
+
+**Not verified: the bare-metal Cortex-M7 build.** `cmake/cortex-m7.cmake` is
+provided but this environment's `arm-none-eabi` toolchain ships no C++ standard
+library, so it could not be run. The ARM figures above are from
+`arm-linux-gnueabihf` — same instruction set, hosted target. The toolchain file
+is untested and labelled as such.
+
+### -fno-exceptions -fno-rtti
+
+Builds clean and references no `__cxa_throw`, `_Unwind_*` or
+`__gxx_personality` symbols. A no-op that is worth having as a build: if the
+library ever starts throwing, this is a link error in CI rather than an unwinder
+in a firmware image.
+
+### Rust
+
+8 binding tests pass. They check the **binding**, not the physics — a field in
+the wrong order, an enum discriminant off by one, a layout mismatch — by either
+round-tripping a published value or comparing against what the library reports
+about itself.
+
+Two findings worth recording:
+
+- `ph_profile_speed_at` answers **0 m/s** for a profile with fewer than two
+  samples. That is a silent failure a caller can propagate; the safe Rust
+  wrapper returns `Err(Error::State)` instead. Found by a binding test.
+- Precision mismatch between library and crate is **not** a link error. It
+  reinterprets every float crossing the boundary, so `check_precision()` exists
+  and every constructor calls it.
+
+## 19. Build and runtime hygiene ✅
 
 | Configuration | Result |
 |---|---|
@@ -1221,7 +1291,7 @@ layers:
 acceptable if you are differencing travel times for ranging. Use `double` unless
 your FPU forces otherwise.
 
-## 19. Performance (measured, not claimed)
+## 20. Performance (measured, not claimed)
 
 13th Gen Intel Core i7-13620H, `-O3`, single thread:
 
@@ -1261,7 +1331,7 @@ actually constrains a control loop, and measures **52 ns**. Re-run
 guarantee; these numbers are not a substitute for WCET analysis on the target
 silicon.
 
-## 20. Self-consistent but NOT independently verified ⚠️
+## 21. Self-consistent but NOT independently verified ⚠️
 
 - **Chapman-Harris surface backscatter coefficients.** The formula is written
   out in the header so a reader can check it, and its behaviour is verified
@@ -1282,7 +1352,7 @@ silicon.
 - **Real measured T/S profiles.** Everything so far uses analytic profiles
   (Munk, linear, isovelocity). Feeding World Ocean Atlas / Argo data is v0.2.
 
-## 21. Known limitations — not bugs, scope ⚠️
+## 22. Known limitations — not bugs, scope ⚠️
 
 - **Shadow fraction depends on ray density.** Gaps between adjacent rays read as
   shadow. Measured convergence for the 100 km Munk case on a 500×250 grid:
@@ -1312,12 +1382,17 @@ silicon.
   frequency-dependent.
 - **2-D (range–depth) only.** No azimuthal coupling or out-of-plane refraction.
 
-## 22. Not implemented in v0.13
+## 23. Not implemented in v0.14
 
 `BioMimeticCommEngine` is not in this release. See `docs/roadmap.md`.
 
 Known gaps within what *is* shipped:
 
+- **The C ABI does not cover everything.** Beamforming, eigenrays and
+  reverberation are absent: their C++ interfaces take several spans at once and
+  a C shape for them has not been designed. "Stable" means what is there will
+  not change shape, not that everything is there.
+- **The Cortex-M7 toolchain file is untested.** See §18.
 - **No carrier or timing recovery.** The demodulator is GIVEN the carrier
   phase. Carrier recovery is a real subsystem and this module does not pretend
   to one; the HFM preamble reveals the time scale but applying it is the

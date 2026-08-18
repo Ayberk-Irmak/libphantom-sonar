@@ -17,6 +17,21 @@ import re
 import sys
 from pathlib import Path
 
+# Placement new -- `new (ptr) T(...)` -- allocates NOTHING. It constructs an
+# object in storage the caller already owns, which is exactly how the C ABI
+# hands out objects without taking over anyone's allocator. Banning it would ban
+# the one construct that makes caller-owned storage expressible.
+#
+# The distinction is syntactic and reliable: an allocating new is followed by a
+# type, a placement new by a parenthesised address. Everything matching the
+# placement form is blanked before the scan, so a plain `new T` in the same file
+# is still caught.
+PLACEMENT_NEW = re.compile(r"\bnew\s*\([^)]*\)\s*(?=[A-Za-z_])")
+
+# An #include names a header; <new> is the placement-new header and declares no
+# allocation of its own. Blanking the directive keeps the scan on code.
+INCLUDE_DIRECTIVE = re.compile(r"^\s*#\s*include\s*[<\"][^>\"]*[>\"]", re.MULTILINE)
+
 BANNED = [
     (r"\bnew\b(?!\s*line)", "operator new"),
     (r"\bdelete\b", "operator delete"),
@@ -38,12 +53,13 @@ CHAR_LIT = re.compile(r"'(?:[^'\\\n]|\\.)*'")
 
 
 def strip_noncode(text: str) -> str:
-    """Blank out comments and literals, preserving line numbering."""
+    """Blank out comments, literals and placement new, preserving line numbers."""
 
     def blank(match):
         return re.sub(r"[^\n]", " ", match.group(0))
 
-    for pattern in (BLOCK_COMMENT, LINE_COMMENT, STRING_LIT, CHAR_LIT):
+    for pattern in (BLOCK_COMMENT, LINE_COMMENT, INCLUDE_DIRECTIVE,
+                    STRING_LIT, CHAR_LIT, PLACEMENT_NEW):
         text = pattern.sub(blank, text)
     return text
 

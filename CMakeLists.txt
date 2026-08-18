@@ -2,7 +2,7 @@
 cmake_minimum_required(VERSION 3.20)
 
 project(phantom-sonar
-        VERSION 0.13.0
+        VERSION 0.14.0
         DESCRIPTION "Real-time ocean acoustics, ray tracing and sonar pulse analysis"
         LANGUAGES CXX)
 
@@ -14,6 +14,7 @@ option(PHANTOM_BUILD_EXAMPLES "Build the example programs"                ON)
 option(PHANTOM_BUILD_BENCH    "Build the hot-path benchmark"              ON)
 option(PHANTOM_BUILD_TOOLS    "Build the Bellhop comparison tool"         ON)
 option(PHANTOM_REAL_FLOAT     "Use float instead of double for Real"      OFF)
+option(PHANTOM_NO_EXCEPTIONS "Build with -fno-exceptions -fno-rtti"          OFF)
 
 # Reject near-miss option names rather than ignoring them.
 #
@@ -84,7 +85,8 @@ add_library(phantom_sonar
     src/tracker.cpp
     src/imm.cpp
     src/ctrv.cpp
-    src/comm.cpp)
+    src/comm.cpp
+    src/c_api.cpp)
 add_library(phantom::sonar ALIAS phantom_sonar)
 
 target_include_directories(phantom_sonar
@@ -103,6 +105,21 @@ set_target_properties(phantom_sonar PROPERTIES
     OUTPUT_NAME phantom-sonar
     VERSION ${PROJECT_VERSION}
     SOVERSION ${PROJECT_VERSION_MAJOR})
+
+# Freestanding / embedded build mode.
+#
+# The library never throws and never uses RTTI, so this should be a no-op -- and
+# that is exactly why it is worth having as a build, because if it ever stops
+# being true the failure is a link error here rather than an unwinder pulled
+# into a firmware image that has no business carrying one.
+#
+# It is applied to the library only. The tests use no exceptions either, but the
+# C++ standard library headers they include are not all exception-free, so the
+# constraint that matters is the one on what ships.
+if(PHANTOM_NO_EXCEPTIONS AND NOT MSVC)
+    target_compile_options(phantom_sonar PRIVATE -fno-exceptions -fno-rtti)
+    target_compile_definitions(phantom_sonar PUBLIC PHANTOM_NO_EXCEPTIONS=1)
+endif()
 
 # NOTE: -ffast-math is deliberately NOT enabled anywhere. It would let the
 # compiler reassociate the Snell invariant and break bit-reproducibility across
@@ -144,6 +161,31 @@ if(PHANTOM_BUILD_TESTS)
     endif()
 
     add_test(NAME phantom_unit_tests COMMAND phantom_tests)
+
+    # The C ABI, compiled by a C COMPILER in C11 mode -- not by C++ in C mode.
+    # A header that only ever meets a C++ compiler quietly accumulates C++-isms
+    # (a default argument, a `bool`, a scoped enum) and nobody finds out until a
+    # real C caller arrives. This target is what finds out.
+    enable_language(C)
+    add_executable(phantom_c_tests tests/c/test_c_api.c)
+    set_target_properties(phantom_c_tests PROPERTIES
+        C_STANDARD 11
+        C_STANDARD_REQUIRED ON
+        C_EXTENSIONS OFF)
+    target_link_libraries(phantom_c_tests PRIVATE phantom_sonar)
+    if(NOT MSVC)
+        target_compile_options(phantom_c_tests PRIVATE
+            -Wall -Wextra -Wpedantic -Wstrict-prototypes -Wmissing-prototypes)
+        if(PHANTOM_WERROR)
+            target_compile_options(phantom_c_tests PRIVATE -Werror)
+        endif()
+        target_link_libraries(phantom_c_tests PRIVATE m)
+    endif()
+    if(PHANTOM_SANITIZE AND NOT MSVC)
+        target_compile_options(phantom_c_tests PRIVATE -fsanitize=address,undefined)
+        target_link_options(phantom_c_tests PRIVATE -fsanitize=address,undefined)
+    endif()
+    add_test(NAME phantom_c_abi_tests COMMAND phantom_c_tests)
 endif()
 
 # ---------------------------------------------------------------------------
