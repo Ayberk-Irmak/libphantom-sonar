@@ -9,6 +9,92 @@ Written newest first. The full reasoning for any number here is in
 [`docs/math_spec.md`](docs/math_spec.md) and
 [`docs/validation.md`](docs/validation.md).
 
+## 1.0.0 — release
+
+Ocean acoustics, sonar signal processing and underwater acoustic communication.
+Zero dependencies, zero heap allocation, C++20.
+
+`1.0` marks the API and the C ABI as stable — not the subject as finished. The
+[roadmap](docs/roadmap.md) and the README's limitations section both say what is
+still open.
+
+### What is in it
+
+All three engines of the original design: the ocean model and an analytic ray
+tracer, echo synthesis and matched-filter detection, and spread-spectrum
+communication. Plus transmission loss and eigenrays, boundary reflection,
+reverberation, beamforming, multi-target tracking with IMM and coordinated-turn
+filters, and acoustics in air.
+
+### Verified against
+
+Nothing in this repository is verified against itself. Every claim is checked
+against a closed form, a theoretical bound, or a number published by somebody
+else — and where that was not possible, the documentation says so.
+
+| Reference | Result |
+|---|---|
+| Bellhop (Acoustics Toolbox), shared `.env` files | turning depths within 0.01 m |
+| UNESCO Tech. Paper 44 check value | **1731.9954** vs published 1731.995 |
+| UNESCO Tech. Paper 44, 220-value table | 0.0499 m/s worst — the table's own rounding |
+| ISO 9613-1:1993 Table 1, 105 values | **0.380%** worst relative error |
+| CRC-32 published check value | 0xCBF43926 |
+| Bearing estimator vs its Cramér–Rao bound | 0.99–1.13× across 14 dB |
+| Tracker NIS vs its χ² distribution | mean 1.951 vs 2.000 |
+| FFT vs an independent O(N²) DFT | 2.3e-16 relative |
+
+### Test and build coverage
+
+189 test cases / **95846 checks**, 269 C ABI checks compiled by a C compiler in
+C11 mode, and 8 Rust binding tests.
+
+Green on Linux, macOS and Windows, under gcc, clang and MSVC, in both single and
+double precision. Clean under AddressSanitizer, UndefinedBehaviorSanitizer and
+cppcheck. Cross-compiles for ARM 32-bit and RISC-V 64-bit with `data == 0` and
+`bss == 0` — no mutable static storage anywhere in the library.
+
+Zero allocation is proven three ways and all three run in CI: a source audit,
+`nm` over the built archive, and the ARM size report.
+
+### The corrections are kept, not buried
+
+Several releases exist because a measurement was wrong in a way that looked
+right. They are documented rather than quietly fixed:
+
+- The sound-speed equation carried **two coefficients from the wrong temperature
+  scale** for eleven releases. Mutual agreement between three equations could
+  never see it — they agree only to 0.1 m/s and the error was 0.016. Only the
+  published check value found it.
+- A "processing gain" measurement reproduced theory **exactly** — 12.17 dB
+  against 12.17 dB — and was meaningless, because both sides were the same
+  tautology. Against white noise at fixed energy per bit, spreading buys nothing.
+- A Snell's-invariant test reported **exactly zero** drift, which is suspicious
+  rather than reassuring: the tracer derives the angle from the invariant.
+- The C ABI carried **160 kB of `.bss`** — half the RAM of the target part — in a
+  buffer that copied data to avoid an assumption that could simply be asserted.
+
+### Known limits
+
+**Nothing here has been measured against a real transducer.** Every number is a
+closed form, a published reference, or a simulation. The apparatus for a real
+measurement exists and is self-verified (`tools/air_bench.py`); the development
+machine has no working acoustic path, and that is recorded rather than glossed.
+
+Ray theory with its caustics; range-independent, 2-D ocean; reverberation as a
+level rather than a field; monostatic only; no carrier or timing recovery in the
+communication engine. The full list is in the README and
+[`docs/validation.md`](docs/validation.md).
+
+### Getting started
+
+```bash
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+./build/phantom_tests
+```
+
+See the [README](README.md) for the C, Rust and embedded paths.
+
 ## 0.16.0 — turning a recording into a measurement
 
 v0.15 built an air bench and could not run it: this machine has no
