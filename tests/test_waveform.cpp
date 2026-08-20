@@ -9,6 +9,7 @@
 
 #include "phantom/waveform.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 

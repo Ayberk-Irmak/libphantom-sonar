@@ -27,6 +27,7 @@
 
 #include <cstddef>   // offsetof, for the ray-point layout assertions
 #include <new>       // placement new only; nothing here allocates
+#include <type_traits>
 
 namespace {
 
@@ -39,9 +40,13 @@ constexpr std::size_t kMaxTracks = 64;
 using CProfile = phantom::SoundSpeedProfile<kProfileCapacity>;
 
 struct TrackerImpl {
-    std::uint32_t next_id;
-    std::size_t   count;
-    phantom::Track tracks[kMaxTracks];
+    // Default member initialisers, like every other struct in the library.
+    // ph_tracker_init placement-constructs this and then sets both fields, so
+    // they were never read uninitialised -- but relying on that is a promise
+    // about a call site rather than a property of the type.
+    std::uint32_t next_id = 1;
+    std::size_t   count = 0;
+    phantom::Track tracks[kMaxTracks] = {};
 };
 
 phantom::Real R(ph_real v) noexcept { return static_cast<phantom::Real>(v); }
@@ -120,7 +125,12 @@ int ph_version(void) {
 
 const char* ph_version_string(void) { return PHANTOM_VERSION_STRING; }
 
-int ph_real_is_double(void) { return sizeof(phantom::Real) == sizeof(double) ? 1 : 0; }
+int ph_real_is_double(void) {
+    // Not sizeof(Real) == sizeof(double): in a double build that is literally
+    // sizeof(double) == sizeof(double), which constant-folds to a tautology and
+    // says nothing about the type. This asks the question that is meant.
+    return std::is_same_v<phantom::Real, double> ? 1 : 0;
+}
 
 const char* ph_status_string(ph_status s) {
     switch (s) {
@@ -285,13 +295,12 @@ ph_status ph_render_real(const ph_pulse_spec* spec, ph_real fs,
                          ph_real* out, size_t out_capacity, size_t* out_written) {
     if (spec == nullptr || out == nullptr) return PH_ERR_NULL;
     const phantom::PulseSpec s = to_cpp(*spec);
-#if PH_REAL_IS_DOUBLE
+    // ph_real and phantom::Real are the same type by construction; the C header
+    // derives one from the same PHANTOM_REAL_FLOAT that picks the other, and
+    // ph_trace_ray static_asserts it. An earlier version guarded this with an
+    // #if whose two branches were identical, which guarded nothing.
     const std::size_t n = phantom::render_real(s, R(fs),
         std::span<phantom::Real>(reinterpret_cast<phantom::Real*>(out), out_capacity));
-#else
-    const std::size_t n = phantom::render_real(s, R(fs),
-        std::span<phantom::Real>(reinterpret_cast<phantom::Real*>(out), out_capacity));
-#endif
     if (out_written != nullptr) *out_written = n;
     return (n > 0) ? PH_OK : PH_ERR_SIZE;
 }

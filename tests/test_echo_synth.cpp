@@ -12,6 +12,7 @@
 #include "phantom/echo_synth.hpp"
 #include "phantom/ping_analyzer.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 

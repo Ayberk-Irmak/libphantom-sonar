@@ -10,6 +10,7 @@
 #include "phantom/imm.hpp"
 #include "phantom/tracker.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 

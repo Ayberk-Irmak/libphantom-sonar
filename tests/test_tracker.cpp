@@ -11,6 +11,7 @@
 
 #include "phantom/tracker.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 

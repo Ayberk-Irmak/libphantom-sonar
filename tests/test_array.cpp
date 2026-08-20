@@ -11,6 +11,7 @@
 #include "phantom/array.hpp"
 #include "phantom/reverberation.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 

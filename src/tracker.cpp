@@ -29,6 +29,9 @@ constexpr std::size_t kMaxM = 3;   // range, bearing, and optionally range rate
 // only infer.
 std::size_t jacobian(const TargetState& s, Real r, bool with_rate,
                      std::array<Real, kMaxM * kN>& h) noexcept {
+    // The rows below write indices 0..11 of a kMaxM * kN array. That is in
+    // bounds, and this says so to the compiler rather than to the reader.
+    static_assert(kMaxM * kN >= 12, "the Jacobian writes 3 rows of 4");
     const Real r2 = r * r;
     h[0] = s.x / r;   h[1] = s.y / r;   h[2] = kZero; h[3] = kZero;
     h[4] = s.y / r2;  h[5] = -s.x / r2; h[6] = kZero; h[7] = kZero;
@@ -96,9 +99,14 @@ bool innovation_covariance(const Track& t, const std::array<Real, kMaxM * kN>& h
             sm[i * m + j] = acc;
         }
     }
-    sm[0] += cfg.range_sigma_m * cfg.range_sigma_m;
-    sm[m + 1] += cfg.bearing_sigma_rad * cfg.bearing_sigma_rad;
-    if (m == 3) sm[8] += cfg.range_rate_sigma_mps * cfg.range_rate_sigma_mps;
+    // Add R to the diagonal. Written as a loop over the diagonal rather than
+    // three indexed writes: sm[0], sm[m+1], sm[8] is correct for m = 2 and 3 but
+    // only provably so if you know m cannot exceed 3, which a reader -- and a
+    // static analyser -- has to take on trust. This form is obviously in bounds.
+    const Real r_diag[kMaxM] = {cfg.range_sigma_m * cfg.range_sigma_m,
+                                cfg.bearing_sigma_rad * cfg.bearing_sigma_rad,
+                                cfg.range_rate_sigma_mps * cfg.range_rate_sigma_mps};
+    for (std::size_t i = 0; i < m && i < kMaxM; ++i) sm[i * m + i] += r_diag[i];
     return true;
 }
 
@@ -503,7 +511,7 @@ std::size_t suppress_template_ghosts(std::span<Track> tracks,
             if (!(doffset > kZero) || doffset > cfg.max_range_offset_m) continue;
 
             Track* weak = (a.amplitude < b.amplitude) ? &a : &b;
-            Track* strong = (weak == &a) ? &b : &a;
+            const Track* strong = (weak == &a) ? &b : &a;
             if (!(weak->amplitude > kZero) || !(strong->amplitude > kZero)) continue;
             const Real ratio_db = static_cast<Real>(20)
                                 * std::log10(strong->amplitude / weak->amplitude);

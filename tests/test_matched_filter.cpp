@@ -14,6 +14,7 @@
 #include "phantom/matched_filter.hpp"
 #include "phantom/waveform.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 

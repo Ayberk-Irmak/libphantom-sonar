@@ -18,6 +18,7 @@
 #include "phantom/reverberation.hpp"
 #include "phantom/sound_speed.hpp"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cmath>

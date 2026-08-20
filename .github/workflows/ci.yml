@@ -235,10 +235,24 @@ jobs:
       - name: Install cppcheck
         run: sudo apt-get update && sudo apt-get install -y cppcheck
       - name: Run cppcheck
+        # Two check classes are suppressed, with reasons rather than silently:
+        #
+        #   useStlAlgorithm -- suggests std::accumulate and friends in place of
+        #   raw loops. The loops here are deliberate: several run over spans
+        #   whose length is a runtime m <= 3, and the explicit form is what
+        #   makes the bounds obvious to a reader. It is a style opinion, not a
+        #   defect class.
+        #
+        #   suspiciousFloatingPointCast -- flags static_cast<Real>(4.6151) as
+        #   losing precision. It does, in a float build, and that is the
+        #   documented trade (see docs/validation.md). The casts exist to
+        #   satisfy -Wdouble-promotion, which this project treats as an error.
         run: >
           cppcheck --enable=warning,style,performance,portability
           --std=c++20 --error-exitcode=1 --inline-suppr --quiet
           --suppress=missingIncludeSystem
+          --suppress=useStlAlgorithm
+          --suppress=suspiciousFloatingPointCast
           -I include/ src/
 
   bellhop-cross-validation:
@@ -322,7 +336,9 @@ jobs:
           grep -q "ghosts resolved    : 3" loop.txt
           # The ray tracer must still be supplying the multipath structure.
           grep -q "Multipath from the ray tracer" loop.txt
-          grep -qE "-> [0-9]+ echoes spanning" loop.txt
+          # `--` first: the pattern begins with a dash, and without it grep
+          # parses "->" as an option and exits 2 with "invalid option".
+          grep -qE -- "-> [0-9]+ echoes spanning" loop.txt
           # Boundary losses must be in the picture: a bounced path has to cost
           # more than the direct one, or v0.5 has silently regressed.
           grep -q "critical grazing angle" loop.txt

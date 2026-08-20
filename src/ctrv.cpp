@@ -68,6 +68,7 @@ void symmetrise(std::array<Real, kN * kN>& p) noexcept {
 // nothing measured here depends on the turn rate directly.
 std::size_t jacobian(const CtrvState& s, Real r, bool with_rate,
                      std::array<Real, kMaxM * kN>& h) noexcept {
+    static_assert(kMaxM * kN >= 15, "the Jacobian writes 3 rows of 5");
     for (std::size_t i = 0; i < kMaxM * kN; ++i) h[i] = kZero;
     const Real r2 = r * r;
     h[0] = s.x / r;    h[1] = s.y / r;
@@ -150,9 +151,14 @@ void innovation_covariance(const CtrvTrack& t, const std::array<Real, kMaxM * kN
             sm[i * m + j] = acc;
         }
     }
-    sm[0] += cfg.range_sigma_m * cfg.range_sigma_m;
-    sm[m + 1] += cfg.bearing_sigma_rad * cfg.bearing_sigma_rad;
-    if (m == 3) sm[8] += cfg.range_rate_sigma_mps * cfg.range_rate_sigma_mps;
+    // Add R to the diagonal. Written as a loop over the diagonal rather than
+    // three indexed writes: sm[0], sm[m+1], sm[8] is correct for m = 2 and 3 but
+    // only provably so if you know m cannot exceed 3, which a reader -- and a
+    // static analyser -- has to take on trust. This form is obviously in bounds.
+    const Real r_diag[kMaxM] = {cfg.range_sigma_m * cfg.range_sigma_m,
+                                cfg.bearing_sigma_rad * cfg.bearing_sigma_rad,
+                                cfg.range_rate_sigma_mps * cfg.range_rate_sigma_mps};
+    for (std::size_t i = 0; i < m && i < kMaxM; ++i) sm[i * m + i] += r_diag[i];
 }
 
 }  // namespace

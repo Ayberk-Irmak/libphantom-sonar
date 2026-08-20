@@ -10,6 +10,7 @@
 
 #include "phantom/fft.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 

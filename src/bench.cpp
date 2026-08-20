@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "phantom/bench.hpp"
 
+#include <algorithm>
 #include <cmath>
 
 namespace phantom::bench {

@@ -18,6 +18,8 @@
 #include "phantom/sound_speed.hpp"
 #include "data/unesco44_table.hpp"
 
+#include <algorithm>
+
 using namespace phantom;
 using namespace phantom::sound_speed;
 

@@ -12,6 +12,7 @@
 #include "phantom/eigenray.hpp"
 #include "phantom/sound_speed.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 
