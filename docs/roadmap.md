@@ -313,7 +313,7 @@ at 1500.
       tool is written and self-verified; a real measurement waits for a machine
       with a working speaker and microphone.
 
-## v0.16 — The apparatus for a measured channel ✅ *(current)*
+## v0.16 — The apparatus for a measured channel ✅  *(released as 1.0.0)*
 
 v0.15 could not run its bench: this machine has no working acoustic path. How
 that was FOUND turned out to matter more than the fact of it, and this release
@@ -343,7 +343,7 @@ is the machinery that came out of it.
 - [ ] **A real measurement: still not done**, and every document says so. No
       number in this project has been measured against a transducer.
 
-## v0.17 — The first measured number
+## Next — the first measured number
 
 Needs hardware this machine does not have; a ~10 EUR USB microphone opens it.
 

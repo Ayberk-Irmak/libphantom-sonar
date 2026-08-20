@@ -58,8 +58,8 @@ extern "C" {
 /* Version and build configuration                                            */
 /* ------------------------------------------------------------------------- */
 
-#define PH_VERSION_MAJOR 0
-#define PH_VERSION_MINOR 16
+#define PH_VERSION_MAJOR 1
+#define PH_VERSION_MINOR 0
 #define PH_VERSION_PATCH 0
 
 /* Runtime version, in case a caller is linked against a different build than

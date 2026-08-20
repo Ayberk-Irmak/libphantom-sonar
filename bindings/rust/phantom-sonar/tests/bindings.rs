@@ -21,8 +21,8 @@ fn precision_matches_the_linked_library() {
 
 #[test]
 fn version_is_reported_through_the_boundary() {
-    assert!(phantom_sonar::version() >= 1600);
-    assert!(phantom_sonar::version_string().starts_with("0."));
+    assert!(phantom_sonar::version() >= 10000);
+    assert!(!phantom_sonar::version_string().is_empty());
 }
 
 #[test]

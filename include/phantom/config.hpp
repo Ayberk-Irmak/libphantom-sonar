@@ -6,10 +6,10 @@
 #include <cstddef>
 #include <cstdint>
 
-#define PHANTOM_VERSION_MAJOR 0
-#define PHANTOM_VERSION_MINOR 16
+#define PHANTOM_VERSION_MAJOR 1
+#define PHANTOM_VERSION_MINOR 0
 #define PHANTOM_VERSION_PATCH 0
-#define PHANTOM_VERSION_STRING "0.16.0"
+#define PHANTOM_VERSION_STRING "1.0.0"
 
 namespace phantom {
 

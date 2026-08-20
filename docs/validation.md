@@ -102,7 +102,7 @@ measurement as a property of the code.
 ### What this does and does not cover
 
 - Ray **geometry** only: paths, turning depths, travel times. Not transmission
-  loss, beam amplitudes or caustics — v0.1 does not compute those.
+  loss, beam amplitudes or caustics — the comparison covers geometry only.
 - Range-independent profiles only. Bellhop supports range-dependent SSPs and
   bathymetry; this library does not yet.
 
@@ -1498,11 +1498,12 @@ silicon.
   frequency-dependent.
 - **2-D (range–depth) only.** No azimuthal coupling or out-of-plane refraction.
 
-## 25. Not implemented in v0.16
+## 25. Known gaps at 1.0
 
-`BioMimeticCommEngine` is not in this release. See `docs/roadmap.md`.
-
-Known gaps within what *is* shipped:
+All three engines of the original specification are implemented: ray tracing and
+the ocean model, echo synthesis and detection, and spread-spectrum
+communication. What follows is what is *not* there, or is there with a
+qualification. See `docs/roadmap.md` for what could come next.
 
 - **No verified hardware measurement.** See §19: this machine has no working
   acoustic path, so every number in this document is simulation or published

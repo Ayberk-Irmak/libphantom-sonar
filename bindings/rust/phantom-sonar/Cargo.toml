@@ -1,6 +1,6 @@
 [package]
 name = "phantom-sonar"
-version = "0.14.0"
+version = "1.0.0"
 edition = "2021"
 license = "Apache-2.0"
 description = "Safe Rust bindings for libphantom-sonar: ocean acoustics, ray tracing, tracking"
@@ -10,7 +10,7 @@ name = "phantom_sonar"
 path = "src/lib.rs"
 
 [dependencies]
-phantom-sonar-sys = { path = "../phantom-sonar-sys" }
+phantom-sonar-sys = { path = "../phantom-sonar-sys", version = "1.0.0" }
 
 [features]
 real_float = ["phantom-sonar-sys/real_float"]

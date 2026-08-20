@@ -1,0 +1,27 @@
+cff-version: 1.2.0
+title: libphantom-sonar
+message: >-
+  A zero-dependency, zero-allocation C++20 library for ocean acoustics,
+  sonar signal processing and underwater acoustic communication.
+type: software
+repository-code: https://github.com/Ayberk-Irmak/libphantom-sonar
+authors:
+  - given-names: Ayberk
+    family-names: Irmak
+abstract: >-
+  Real-time ocean acoustics simulation: analytic ray tracing through
+  piecewise-linear sound speed profiles, transmission loss and eigenrays,
+  boundary reflection and reverberation, waveform synthesis and
+  matched-filter detection, beamforming, multi-target tracking with IMM
+  and coordinated-turn filters, and spread-spectrum acoustic
+  communication. Cross-validated against Bellhop, the UNESCO sound-speed
+  tables and ISO 9613-1.
+keywords:
+  - underwater-acoustics
+  - sonar
+  - ray-tracing
+  - signal-processing
+  - real-time
+  - cpp20
+license: Apache-2.0
+version: 1.0.0
