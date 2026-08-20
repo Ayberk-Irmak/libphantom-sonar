@@ -19,6 +19,19 @@ constexpr Real kMinRange = static_cast<Real>(1e-3);
 
 constexpr std::size_t kMaxM = 3;   // range, bearing, and optionally range rate
 
+// The measurement Jacobian is kMaxM rows of kN. Named rather than written as
+// the product at each use: cppcheck 2.13 (what CI ships) resolves
+// std::array<Real, kJacobianSize> as having THREE elements -- it takes the first
+// factor and stops -- and then reports every write past index 2 as out of
+// bounds. The code is correct at 12 elements and gcc, clang and ASan all agree,
+// but a name the analyser can fold is cheaper than arguing with it.
+constexpr std::size_t kJacobianSize = 12;
+constexpr std::size_t kInnovSize = 9;
+constexpr std::size_t kPhtSize = 12;
+static_assert(kPhtSize == kN * kMaxM, "P H^T is n x m");
+static_assert(kInnovSize == kMaxM * kMaxM, "the innovation covariance is m x m");
+static_assert(kJacobianSize == kMaxM * kN, "3 measurement rows by 4 states");
+
 // Measurement Jacobian H (m x 4), row-major, for z = [range, bearing, rdot].
 //
 // The third row is where the fusion lives. With rdot = -(x vx + y vy)/r:
@@ -28,10 +41,7 @@ constexpr std::size_t kMaxM = 3;   // range, bearing, and optionally range rate
 // direct range-rate measurement observes velocity that position history can
 // only infer.
 std::size_t jacobian(const TargetState& s, Real r, bool with_rate,
-                     std::array<Real, kMaxM * kN>& h) noexcept {
-    // The rows below write indices 0..11 of a kMaxM * kN array. That is in
-    // bounds, and this says so to the compiler rather than to the reader.
-    static_assert(kMaxM * kN >= 12, "the Jacobian writes 3 rows of 4");
+                     std::array<Real, kJacobianSize>& h) noexcept {
     const Real r2 = r * r;
     h[0] = s.x / r;   h[1] = s.y / r;   h[2] = kZero; h[3] = kZero;
     h[4] = s.y / r2;  h[5] = -s.x / r2; h[6] = kZero; h[7] = kZero;
@@ -48,7 +58,7 @@ std::size_t jacobian(const TargetState& s, Real r, bool with_rate,
 // Cholesky factor of an m x m symmetric positive definite matrix, in place over
 // the lower triangle. Small and real, so no need for the complex version in
 // beamformer.cpp.
-bool small_cholesky(std::array<Real, kMaxM * kMaxM>& a, std::size_t m) noexcept {
+bool small_cholesky(std::array<Real, kInnovSize>& a, std::size_t m) noexcept {
     for (std::size_t j = 0; j < m; ++j) {
         Real d = a[j * m + j];
         for (std::size_t k = 0; k < j; ++k) d -= a[j * m + k] * a[j * m + k];
@@ -64,7 +74,7 @@ bool small_cholesky(std::array<Real, kMaxM * kMaxM>& a, std::size_t m) noexcept 
     return true;
 }
 
-void small_cholesky_solve(const std::array<Real, kMaxM * kMaxM>& l, std::size_t m,
+void small_cholesky_solve(const std::array<Real, kInnovSize>& l, std::size_t m,
                           std::array<Real, kMaxM>& x) noexcept {
     for (std::size_t i = 0; i < m; ++i) {
         Real acc = x[i];
@@ -79,10 +89,10 @@ void small_cholesky_solve(const std::array<Real, kMaxM * kMaxM>& l, std::size_t 
 }
 
 // S = H P H^T + R and the PH^T it is built from, both needed by the update.
-bool innovation_covariance(const Track& t, const std::array<Real, kMaxM * kN>& h,
+bool innovation_covariance(const Track& t, const std::array<Real, kJacobianSize>& h,
                            std::size_t m, const TrackerConfig& cfg,
-                           std::array<Real, kN * kMaxM>& pht,
-                           std::array<Real, kMaxM * kMaxM>& sm) noexcept {
+                           std::array<Real, kPhtSize>& pht,
+                           std::array<Real, kInnovSize>& sm) noexcept {
     for (std::size_t i = 0; i < kN; ++i) {
         for (std::size_t j = 0; j < m; ++j) {
             Real acc = kZero;
@@ -211,17 +221,17 @@ Real track_nis(const Track& track, const Measurement& z,
     const Real r = track.state.range_m();
     if (!(r > kMinRange)) return kHugeNis;
 
-    std::array<Real, kMaxM * kN> h{};
+    std::array<Real, kJacobianSize> h{};
     const std::size_t m = jacobian(track.state, r, z.has_range_rate, h);
 
-    std::array<Real, kN * kMaxM> pht{};
-    std::array<Real, kMaxM * kMaxM> sm{};
+    std::array<Real, kPhtSize> pht{};
+    std::array<Real, kInnovSize> sm{};
     innovation_covariance(track, h, m, cfg, pht, sm);
 
     std::array<Real, kMaxM> y{};
     innovation(track, z, r, y);
 
-    std::array<Real, kMaxM * kMaxM> l = sm;
+    std::array<Real, kInnovSize> l = sm;
     if (!small_cholesky(l, m)) return kHugeNis;
     std::array<Real, kMaxM> x = y;
     small_cholesky_solve(l, m, x);
@@ -237,14 +247,14 @@ Real measurement_likelihood(const Track& track, const Measurement& z,
     const Real r = track.state.range_m();
     if (!(r > kMinRange)) return kZero;
 
-    std::array<Real, kMaxM * kN> h{};
+    std::array<Real, kJacobianSize> h{};
     const std::size_t m = jacobian(track.state, r, z.has_range_rate, h);
 
-    std::array<Real, kN * kMaxM> pht{};
-    std::array<Real, kMaxM * kMaxM> sm{};
+    std::array<Real, kPhtSize> pht{};
+    std::array<Real, kInnovSize> sm{};
     innovation_covariance(track, h, m, cfg, pht, sm);
 
-    std::array<Real, kMaxM * kMaxM> l = sm;
+    std::array<Real, kInnovSize> l = sm;
     if (!small_cholesky(l, m)) return kZero;
 
     std::array<Real, kMaxM> y{};
@@ -277,14 +287,14 @@ bool track_update(Track& track, const Measurement& z, const TrackerConfig& cfg) 
     const Real r = track.state.range_m();
     if (!(r > kMinRange)) return false;
 
-    std::array<Real, kMaxM * kN> h{};
+    std::array<Real, kJacobianSize> h{};
     const std::size_t m = jacobian(track.state, r, z.has_range_rate, h);
 
-    std::array<Real, kN * kMaxM> pht{};
-    std::array<Real, kMaxM * kMaxM> sm{};
+    std::array<Real, kPhtSize> pht{};
+    std::array<Real, kInnovSize> sm{};
     innovation_covariance(track, h, m, cfg, pht, sm);
 
-    std::array<Real, kMaxM * kMaxM> l = sm;
+    std::array<Real, kInnovSize> l = sm;
     if (!small_cholesky(l, m)) return false;
 
     // K = P H^T S^-1, obtained a column at a time by solving S k_i = (PH^T)_i.

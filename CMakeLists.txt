@@ -68,6 +68,15 @@ endif()
 # ---------------------------------------------------------------------------
 # The library
 # ---------------------------------------------------------------------------
+# MSVC deprecates fopen in favour of its non-standard fopen_s and raises C4996,
+# which -WX turns into an error. fopen is standard C and the deprecation is not;
+# the library itself does no I/O at all, so this only affects the examples and
+# tools that write CSV. Silencing it is preferable to writing two file-opening
+# paths for one compiler's opinion.
+if(MSVC)
+    add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
+endif()
+
 add_library(phantom_sonar
     src/ray_tracer.cpp
     src/channel.cpp

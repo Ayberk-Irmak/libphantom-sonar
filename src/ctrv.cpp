@@ -13,6 +13,15 @@ constexpr Real kHugeNis = static_cast<Real>(1e30);
 constexpr Real kMinRange = static_cast<Real>(1e-3);
 constexpr std::size_t kN = kCtrvN;          // 5
 constexpr std::size_t kMaxM = 3;
+// See the note in tracker.cpp: an older cppcheck folds kMaxM * kN to 3.
+constexpr std::size_t kJacobianSize = 15;
+constexpr std::size_t kInnovSize = 9;
+constexpr std::size_t kPhtSize = 15;
+constexpr std::size_t kCovSize = 25;
+static_assert(kCovSize == kN * kN, "the state covariance is n x n");
+static_assert(kPhtSize == kN * kMaxM, "P H^T is n x m");
+static_assert(kInnovSize == kMaxM * kMaxM, "the innovation covariance is m x m");
+static_assert(kJacobianSize == kMaxM * kN, "3 measurement rows by 5 states");
 
 // The four quantities the coordinated turn needs, plus the two derivatives with
 // respect to omega that the Jacobian needs. Computing them together is what
@@ -54,7 +63,7 @@ TurnTerms turn_terms(Real w, Real dt) noexcept {
     return t;
 }
 
-void symmetrise(std::array<Real, kN * kN>& p) noexcept {
+void symmetrise(std::array<Real, kCovSize>& p) noexcept {
     for (std::size_t i = 0; i < kN; ++i) {
         for (std::size_t j = i + 1; j < kN; ++j) {
             const Real m = (p[i * kN + j] + p[j * kN + i]) / kTwo;
@@ -67,8 +76,7 @@ void symmetrise(std::array<Real, kN * kN>& p) noexcept {
 // Measurement Jacobian, 2 or 3 rows by 5 columns. The fifth column is zero:
 // nothing measured here depends on the turn rate directly.
 std::size_t jacobian(const CtrvState& s, Real r, bool with_rate,
-                     std::array<Real, kMaxM * kN>& h) noexcept {
-    static_assert(kMaxM * kN >= 15, "the Jacobian writes 3 rows of 5");
+                     std::array<Real, kJacobianSize>& h) noexcept {
     for (std::size_t i = 0; i < kMaxM * kN; ++i) h[i] = kZero;
     const Real r2 = r * r;
     h[0] = s.x / r;    h[1] = s.y / r;
@@ -83,7 +91,7 @@ std::size_t jacobian(const CtrvState& s, Real r, bool with_rate,
     return 3;
 }
 
-bool cholesky(std::array<Real, kMaxM * kMaxM>& a, std::size_t m) noexcept {
+bool cholesky(std::array<Real, kInnovSize>& a, std::size_t m) noexcept {
     for (std::size_t i = 0; i < m; ++i) {
         for (std::size_t j = 0; j <= i; ++j) {
             Real sum = a[i * m + j];
@@ -100,7 +108,7 @@ bool cholesky(std::array<Real, kMaxM * kMaxM>& a, std::size_t m) noexcept {
     return true;
 }
 
-void cholesky_solve(const std::array<Real, kMaxM * kMaxM>& l, std::size_t m,
+void cholesky_solve(const std::array<Real, kInnovSize>& l, std::size_t m,
                     std::array<Real, kMaxM>& x) noexcept {
     for (std::size_t i = 0; i < m; ++i) {
         Real sum = x[i];
@@ -133,10 +141,10 @@ std::size_t innovation(const CtrvState& s, const Measurement& z, Real r,
 }
 
 // S = H P H^T + R, and PH^T alongside it since the gain needs both.
-void innovation_covariance(const CtrvTrack& t, const std::array<Real, kMaxM * kN>& h,
+void innovation_covariance(const CtrvTrack& t, const std::array<Real, kJacobianSize>& h,
                            std::size_t m, const TrackerConfig& cfg,
-                           std::array<Real, kN * kMaxM>& pht,
-                           std::array<Real, kMaxM * kMaxM>& sm) noexcept {
+                           std::array<Real, kPhtSize>& pht,
+                           std::array<Real, kInnovSize>& sm) noexcept {
     for (std::size_t i = 0; i < kN; ++i) {
         for (std::size_t j = 0; j < m; ++j) {
             Real acc = kZero;
@@ -271,14 +279,14 @@ bool ctrv_update(CtrvTrack& track, const Measurement& z,
     const Real r = range_of(track.state);
     if (!(r > kMinRange)) return false;
 
-    std::array<Real, kMaxM * kN> h{};
+    std::array<Real, kJacobianSize> h{};
     const std::size_t m = jacobian(track.state, r, z.has_range_rate, h);
 
-    std::array<Real, kN * kMaxM> pht{};
-    std::array<Real, kMaxM * kMaxM> sm{};
+    std::array<Real, kPhtSize> pht{};
+    std::array<Real, kInnovSize> sm{};
     innovation_covariance(track, h, m, cfg, pht, sm);
 
-    std::array<Real, kMaxM * kMaxM> l = sm;
+    std::array<Real, kInnovSize> l = sm;
     if (!cholesky(l, m)) return false;
 
     Real k_gain[kN * kMaxM];
@@ -343,13 +351,13 @@ Real ctrv_nis(const CtrvTrack& track, const Measurement& z,
     const Real r = range_of(track.state);
     if (!(r > kMinRange)) return kHugeNis;
 
-    std::array<Real, kMaxM * kN> h{};
+    std::array<Real, kJacobianSize> h{};
     const std::size_t m = jacobian(track.state, r, z.has_range_rate, h);
-    std::array<Real, kN * kMaxM> pht{};
-    std::array<Real, kMaxM * kMaxM> sm{};
+    std::array<Real, kPhtSize> pht{};
+    std::array<Real, kInnovSize> sm{};
     innovation_covariance(track, h, m, cfg, pht, sm);
 
-    std::array<Real, kMaxM * kMaxM> l = sm;
+    std::array<Real, kInnovSize> l = sm;
     if (!cholesky(l, m)) return kHugeNis;
 
     std::array<Real, kMaxM> y{};
